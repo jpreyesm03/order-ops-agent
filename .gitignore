@@ -8,3 +8,6 @@ evals/runs/*/traces/
 node_modules/
 .next/
 web/.env.local
+OUTLINE.md
+STUDY_GUIDE.md
+CODE_WALKTHROUGH.md
