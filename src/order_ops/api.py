@@ -4,7 +4,10 @@
 """
 from __future__ import annotations
 
+import json
 import os
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -17,13 +20,17 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from . import db
 from .agent import Agent
 from .gate import Gate, Session
+from .shopify import MIRROR_SQL, ShopifyClient, ShopifyStore, apply_webhook, verify_webhook
 from .store import ToolError
 
-LIVE = "live"
+# tau2: the benchmark store in Postgres. shopify: a real Shopify dev store, mirrored in Postgres.
+BACKEND = os.getenv("STORE_BACKEND", "tau2")
+LIVE = "shop" if BACKEND == "shopify" else "live"
 GREETING = "Hi! I'm the store's support assistant. I can help with order status, cancellations, address or " \
            "payment changes, returns and exchanges. What can I do for you?"
 THRESHOLD = float(os.getenv("APPROVAL_THRESHOLD_USD", "250"))
@@ -33,11 +40,27 @@ TURNS_PER_DAY = int(os.getenv("TURNS_PER_DAY", "1500"))
 
 _conn_lock = threading.Lock()
 _client: anthropic.Anthropic | None = None
+_shopify: ShopifyClient | None = None
+_reseed_lock = threading.Lock()
+
+
+def make_gate(conn) -> Gate:
+    global _shopify
+    if BACKEND != "shopify":
+        return Gate(conn, LIVE)
+    if _shopify is None:
+        _shopify = ShopifyClient()
+    return Gate(conn, LIVE, ShopifyStore(conn, LIVE, _shopify))
 
 
 def ensure_live(conn) -> None:
     """Create the base store and the live copy on first boot."""
     have = {r[0] for r in conn.execute("SELECT schema_name FROM information_schema.schemata")}
+    if BACKEND == "shopify":
+        if LIVE not in have:
+            raise RuntimeError("No Shopify mirror yet: run `python -m order_ops.seed_shopify` first.")
+        conn.execute(MIRROR_SQL.format(s=LIVE))
+        return
     if "base" not in have:
         db.load_store(conn, "base", db.load_tau2_db())
     if LIVE not in have:
@@ -138,7 +161,7 @@ def _approval_dict(r) -> dict:
 @app.get("/healthz")
 def healthz(conn=Depends(get_conn)) -> dict:
     conn.execute("SELECT 1")
-    return {"ok": True}
+    return {"ok": True, "backend": BACKEND}
 
 
 @app.post("/api/sessions")
@@ -170,7 +193,7 @@ def post_message(session_id: str, body: MessageIn, conn=Depends(get_conn)) -> di
             notices.append(f"Supervisor update: request {a['approval_id']} ({a['summary']}) was {a['status']}"
                            + (f". Note: {a['decision_note']}" if a["decision_note"] else "") + ".")
             extra["notified"].append(a["approval_id"])
-    agent = Agent(Gate(conn, LIVE), client=_client)
+    agent = Agent(make_gate(conn), client=_client)
     started = time.perf_counter()
     turn = agent.respond(session, messages, body.text, notices=notices)
     latency_ms = round((time.perf_counter() - started) * 1000)
@@ -200,7 +223,7 @@ def list_approvals(status: str = "pending", conn=Depends(get_conn)) -> list[dict
 @app.post("/api/approvals/{approval_id}/decision")
 def decide(approval_id: str, body: DecisionIn, conn=Depends(get_conn)) -> dict:
     try:
-        return Gate(conn, LIVE).decide(approval_id, body.approve, body.reviewer, body.note)
+        return make_gate(conn).decide(approval_id, body.approve, body.reviewer, body.note)
     except ToolError as e:
         raise HTTPException(409, str(e)) from e
 
@@ -260,6 +283,39 @@ def reset(x_admin_token: str = Header(default=""), conn=Depends(get_conn)) -> di
     token = os.getenv("ADMIN_TOKEN")
     if not token or x_admin_token != token:
         raise HTTPException(403, "Forbidden")
+    if BACKEND == "shopify":  # delete the seeded Shopify orders and seed them again (takes ~1 min)
+        if not _reseed_lock.acquire(blocking=False):
+            return {"ok": True, "status": "already reseeding"}
+        threading.Thread(target=_reseed, daemon=True).start()
+        return {"ok": True, "status": "reseeding"}
     with _conn_lock:
         db.clone_schema(conn, "base", LIVE)
     return {"ok": True}
+
+
+def _reseed() -> None:
+    try:
+        subprocess.run([sys.executable, "-m", "order_ops.seed_shopify", "--reset", "--schema", LIVE,
+                        "--users", os.getenv("SHOPIFY_SEED_USERS", "8")], check=False, timeout=900)
+    finally:
+        _reseed_lock.release()
+
+
+@app.post("/webhooks/shopify")
+async def shopify_webhook(request: Request) -> dict:
+    """Shopify → mirror. Only signed requests are accepted (HMAC-SHA256 of the raw body with the app secret)."""
+    body = await request.body()
+    if BACKEND != "shopify" or not verify_webhook(body, request.headers.get("x-shopify-hmac-sha256", ""),
+                                                 os.getenv("SHOPIFY_CLIENT_SECRET", "")):
+        raise HTTPException(401, "Invalid signature")
+    webhook_id = request.headers.get("x-shopify-webhook-id") or request.headers.get("x-shopify-event-id", "")
+    topic = request.headers.get("x-shopify-topic", "")
+
+    def apply() -> str:
+        conn = db.connect()
+        try:
+            return apply_webhook(conn, LIVE, webhook_id, topic, json.loads(body))
+        finally:
+            conn.close()
+
+    return {"ok": True, "action": await run_in_threadpool(apply)}

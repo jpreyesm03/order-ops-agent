@@ -70,10 +70,10 @@ class Blocked(Exception):
 
 
 class Gate:
-    def __init__(self, conn: psycopg.Connection, schema: str):
+    def __init__(self, conn: psycopg.Connection, schema: str, store: Store | None = None):
         self.conn = conn
         self.s = db.ident(schema)
-        self.store = Store(conn, schema)
+        self.store = store or Store(conn, schema)  # ShopifyStore for the live Shopify demo
 
     # ---------- public ----------
     def run(self, session: Session, tool: str, args: dict[str, Any]) -> dict[str, Any]:

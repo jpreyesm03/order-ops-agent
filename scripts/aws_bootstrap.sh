@@ -42,6 +42,18 @@ printf 'not-set-yet' > "$TMP/anthropic"
 put_secret "$APP/database-url" "$TMP/db"
 put_secret "$APP/admin-token" "$TMP/admin"
 put_secret "$APP/anthropic-api-key" "$TMP/anthropic"
+# Shopify app credentials (JSON: ECS injects each key as its own env var). Re-run updates the value from .env.
+python3 - "$TMP/shopify" <<'PY'
+import json, pathlib, sys
+env = dict(l.split("=", 1) for l in pathlib.Path(".env").read_text().splitlines() if "=" in l and not l.startswith("#"))
+pathlib.Path(sys.argv[1]).write_text(json.dumps({k: env[k] for k in ("SHOPIFY_CLIENT_ID", "SHOPIFY_CLIENT_SECRET")}))
+PY
+if exists aws secretsmanager describe-secret --secret-id "$APP/shopify"; then
+  aws secretsmanager put-secret-value --secret-id "$APP/shopify" --secret-string "file://$TMP/shopify" >/dev/null
+  echo "secret: $APP/shopify updated"
+else
+  put_secret "$APP/shopify" "$TMP/shopify"
+fi
 SECRET_ARNS="$(aws secretsmanager list-secrets --filters Key=name,Values="$APP/" \
   --query 'SecretList[].ARN' --output json)"
 

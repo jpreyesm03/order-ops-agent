@@ -15,7 +15,7 @@ def client():
 
 
 def test_health_and_session(client):
-    assert client.get("/healthz").json() == {"ok": True}
+    assert client.get("/healthz").json() == {"ok": True, "backend": "tau2"}
     s = client.post("/api/sessions").json()
     assert s["session_id"].startswith("ses_") and s["greeting"]
     got = client.get(f"/api/sessions/{s['session_id']}").json()

@@ -87,9 +87,15 @@ added under it as they come in.
   shows TypeScript/React. The browser calls FastAPI directly (CORS), with rate limits per IP and per day to protect
   the API key on a public demo.
 
-## D13. Hosting: Vercel (web) + AWS App Runner (API, Docker) + Neon (Postgres)
+## D13. Hosting: Vercel (web) + AWS ECS Express (API, Docker) + Neon (Postgres)
 - **Why:** Vercel is the native home for Next.js and free. The API ships as a Docker image (multi-stage, non-root)
   to AWS. Neon gives serverless Postgres 18 at $0 for this size, same version locally and in CI.
+- **App Runner → ECS:** the plan was App Runner, but AWS no longer lets new accounts create App Runner services.
+  ECS Express Mode (its successor) runs the same image on Fargate behind an HTTPS load balancer it manages.
+  One task (in-memory rate limits, capped spend), ~$25/month.
+- **Delivery:** every push to `main` runs tests, builds the image, pushes it to ECR with short-lived GitHub OIDC
+  credentials (no AWS keys stored in GitHub; the role only trusts this repo's `main`) and rolls it out blue/green.
+  Secrets (database URL, API keys, Shopify app) are in Secrets Manager, readable only by the task's role.
 
 ## D14. MCP server
 - The same tools behind the same gate, for any MCP client. Writes take the customer's confirming words as an
@@ -102,3 +108,37 @@ added under it as they come in.
   that must never be touched.
 - The repo lives outside the cloud-synced folder (sync evicted files and hung Python); a git bundle + snapshot is
   copied there after commits.
+
+## D16. Live demo on a real Shopify store; benchmark stays on τ²
+- **Options:** Shopify read-only · a switch between both stores · live demo fully on Shopify.
+- **Chosen:** the public demo runs against a Shopify dev store (`order-ops-demo`); evals keep running on the τ²
+  Postgres store, so scores stay comparable to published results.
+- **How the data gets there:** `seed_shopify` copies a deterministic slice of τ² (8 customers with a pending and a
+  delivered order, their 20 orders, the 41 products they touch) into Shopify with the same order numbers, and loads
+  the same slice into the mirror schema. Shopify allows 3 options per product, so 4-option τ² products get their
+  last two merged ("material and style").
+
+## D17. Write-through mirror: Shopify is the system of record, Postgres serves reads
+- **Write path:** the store method runs first inside a savepoint (same business rules as the benchmark, e.g. only
+  pending orders can be cancelled), then the Shopify Admin GraphQL mutation runs; the mirror commits only if Shopify
+  accepted. A change the policy forbids never reaches Shopify; a change Shopify refuses never shows in the mirror.
+- **Why not read from Shopify directly:** the gate's ownership checks, the console and the audit log need fast SQL,
+  and the Admin API is rate-limited.
+- **Found in testing:** `orderCancel` is a background job and can fail silently (the test gateway refused the
+  refund, the order stayed open while the job reported done). The cancel now waits for the job and checks
+  `cancelledAt` before committing, and seed payments are recorded as manual payments (as imported orders are).
+- **Mapping:** τ² ids → Shopify GIDs in `shopify_ids` (orders, line items, fulfillment line items, variants by SKU,
+  customers, addresses). Order edits create new line items, so the map is refreshed after each edit.
+- **Gaps, stated plainly:** Shopify has no API to move a pending order's payment to another method; that change
+  is written to the order note and the mirror. Price differences from item swaps stay as an outstanding balance on
+  the Shopify order.
+
+## D18. Webhooks for changes made outside the agent
+- Staff can cancel or edit orders in the Shopify admin. Signed webhooks (HMAC-SHA256 of the raw body with the app
+  secret, compared in constant time) update the mirror. Each webhook id is applied once; events for changes the
+  agent already made are recognized as "in sync". External changes are written to the audit log as `external`.
+
+## D19. Auth: client-credentials tokens, secrets only in Secrets Manager
+- The app uses Shopify's client-credentials grant: a 24 h token, renewed automatically; no long-lived Admin token
+  exists anywhere. Client id/secret live in `.env` locally and in AWS Secrets Manager in production, injected into
+  the container as environment variables by ECS.

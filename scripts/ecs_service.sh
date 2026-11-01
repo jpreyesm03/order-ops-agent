@@ -21,17 +21,20 @@ aws logs put-retention-policy --log-group-name "$LOG_GROUP" --retention-in-days 
 
 secret() { aws secretsmanager describe-secret --secret-id "$APP/$1" --query ARN --output text; }
 CONTAINER="$(python3 - "$IMAGE" "$LOG_GROUP" "$CORS_ORIGINS" "$(secret database-url)" "$(secret admin-token)" \
-  "$(secret anthropic-api-key)" <<'EOF'
+  "$(secret anthropic-api-key)" "$(secret shopify)" <<'EOF'
 import json, sys
-image, logs, cors, db, admin, anthropic = sys.argv[1:]
+image, logs, cors, db, admin, anthropic, shopify = sys.argv[1:]
 env = {"CORS_ORIGINS": cors, "APPROVAL_THRESHOLD_USD": "250", "AGENT_MODEL": "claude-haiku-5-5",
-       "AGENT_EFFORT": "medium", "MAX_TURNS_PER_SESSION": "40", "TURNS_PER_IP_PER_HOUR": "60", "TURNS_PER_DAY": "1500"}
+       "AGENT_EFFORT": "medium", "MAX_TURNS_PER_SESSION": "40", "TURNS_PER_IP_PER_HOUR": "60", "TURNS_PER_DAY": "1500",
+       "STORE_BACKEND": "shopify", "SHOPIFY_STORE": "order-ops-demo.myshopify.com", "SHOPIFY_SEED_USERS": "8"}
 print(json.dumps({
     "image": image, "containerPort": 8080,
     "awsLogsConfiguration": {"logGroup": logs, "logStreamPrefix": "api"},
     "environment": [{"name": k, "value": v} for k, v in env.items()],
     "secrets": [{"name": "DATABASE_URL", "valueFrom": db}, {"name": "ADMIN_TOKEN", "valueFrom": admin},
-                {"name": "ANTHROPIC_API_KEY", "valueFrom": anthropic}],
+                {"name": "ANTHROPIC_API_KEY", "valueFrom": anthropic},
+                {"name": "SHOPIFY_CLIENT_ID", "valueFrom": f"{shopify}:SHOPIFY_CLIENT_ID::"},
+                {"name": "SHOPIFY_CLIENT_SECRET", "valueFrom": f"{shopify}:SHOPIFY_CLIENT_SECRET::"}],
 }))
 EOF
 )"
