@@ -3,7 +3,7 @@ name: orderops-p5
 
 services:
   db:
-    image: postgres:17
+    image: postgres:18
     environment:
       POSTGRES_USER: orderops
       POSTGRES_PASSWORD: orderops
@@ -11,7 +11,7 @@ services:
     ports:
       - "127.0.0.1:55433:5432"   # localhost only, high port
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U orderops -d orderops_p5"]
       interval: 2s
