@@ -11,7 +11,7 @@ source scripts/aws_env.sh
 CLUSTER="$APP"
 SERVICE="$APP-api"
 LOG_GROUP="/ecs/$SERVICE"
-CORS_ORIGINS="${CORS_ORIGINS:-http://localhost:3005}"
+CORS_ORIGINS="${CORS_ORIGINS:-https://order-ops-agent.vercel.app,http://localhost:3005}"
 IMAGE="$ECR_URI:${IMAGE_TAG:-latest}"
 
 aws ecs describe-clusters --clusters "$CLUSTER" --query 'clusters[?status==`ACTIVE`].clusterName' --output text \
