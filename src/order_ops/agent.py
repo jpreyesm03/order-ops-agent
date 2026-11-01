@@ -103,13 +103,17 @@ class Agent:
         return resp
 
     def respond(self, session: Session, messages: list[dict], customer_text: str,
-                notices: list[str] | None = None) -> Turn:
+                notices: list[str] | None = None, gate_text: str | None = None,
+                new_customer_turn: bool = True) -> Turn:
         """Handle one customer message. `messages` is the full API history and is extended in place.
 
         `notices` are operator updates (e.g. "approval apr_x was approved by a supervisor"). They go in as
         mid-conversation system messages, a channel the customer cannot write to.
+        `gate_text` is the customer's raw new message (the confirmation check reads only this, never a recap);
+        `new_customer_turn=False` when a specialist takes over mid-turn, so the same "yes" isn't counted twice.
         """
-        session.on_customer_message(customer_text)
+        if new_customer_turn:
+            session.on_customer_message(customer_text if gate_text is None else gate_text)
         messages.append({"role": "user", "content": customer_text})
         for notice in notices or []:
             messages.append({"role": "system", "content": notice})
@@ -127,6 +131,11 @@ class Agent:
                 return Turn(text, calls, transferred)
             results = []
             for tu in tool_uses:
+                if tu.name == "handoff":  # router mode: close this specialist's turn, the router continues
+                    calls.append({"name": "handoff", "args": dict(tu.input), "result": {"ok": True}})
+                    messages.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tu.id,
+                                                                  "content": "Handed off."}]})
+                    return Turn("", calls, transferred)
                 out = self.gate.run(session, tu.name, dict(tu.input))
                 calls.append({"name": tu.name, "args": dict(tu.input), "result": out})
                 transferred |= tu.name == "transfer_to_human_agents" and out.get("ok", False)

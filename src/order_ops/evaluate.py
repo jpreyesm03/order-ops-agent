@@ -27,6 +27,7 @@ import anthropic
 from . import db
 from .agent import Agent, Usage
 from .gate import Gate, Session
+from .router import RoutedAgent
 from .simulator import TRANSFER, UserSimulator, scenario_text
 from .store import WRITE_TOOLS, Store, ToolError, call
 
@@ -101,7 +102,8 @@ def judge_nl(client: anthropic.Anthropic, transcript: str, assertions: list[str]
     return json.loads(text)["results"]
 
 
-def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: float) -> dict[str, Any]:
+def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: float,
+                arch: str = "single") -> dict[str, Any]:
     conn = db.connect()
     schema = f"ep_{uuid.uuid4().hex[:10]}"
     started = time.perf_counter()
@@ -110,7 +112,7 @@ def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: 
         db.clone_schema(conn, "base", schema)
         gate = Gate(conn, schema)
         session = Session(session_id=f"eval-{task['id']}-{trial}", auto_approve=True, approval_threshold=threshold)
-        agent = Agent(gate, client=client)
+        agent = RoutedAgent(gate, client=client) if arch == "routed" else Agent(gate, client=client)
         sim = UserSimulator(scenario_text(task), client=client)
         messages: list[dict] = []
         transcript = [f"assistant: {GREETING}"]
@@ -139,7 +141,8 @@ def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: 
         gold_writes = [a["name"] for a in task["evaluation_criteria"].get("actions") or [] if a["name"] in WRITE_TOOLS]
         did_writes = [c["name"] for c in tool_calls if c["name"] in WRITE_TOOLS and c["result"].get("ok")
                       and not c["result"].get("duplicate")]
-        cost = (agent.usage.cost(agent.model) + sim.usage.cost(sim.model)
+        agent_cost = agent.cost() if arch == "routed" else agent.usage.cost(agent.model)
+        cost = (agent_cost + sim.usage.cost(sim.model)
                 + judge_usage.cost(os.getenv("JUDGE_MODEL", "claude-sonnet-5-5")))
         return {
             "task_id": task["id"], "trial": trial, "reward": float(db_match and nl_ok), "db_match": db_match,
@@ -149,7 +152,8 @@ def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: 
             "tool_calls": tool_calls, "transcript": transcript,
             "usage": {"agent": vars(agent.usage) | {"model": agent.model},
                       "sim": vars(sim.usage) | {"model": sim.model}, "judge": vars(judge_usage)},
-            "agent_cost_usd": round(agent.usage.cost(agent.model), 5), "cost_usd": round(cost, 5),
+            "agent_cost_usd": round(agent_cost, 5), "cost_usd": round(cost, 5), "arch": arch,
+            "routes": getattr(agent, "routes", None), "handoffs": getattr(agent, "handoffs", 0),
             "agent_latency_ms_per_call": round(agent.usage.latency_ms / max(agent.usage.calls, 1)),
             "wall_s": round(time.perf_counter() - started, 1),
         }
@@ -203,6 +207,7 @@ def main() -> None:
     ap.add_argument("--trials", type=int, default=1)
     ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--label", default=time.strftime("run_%Y%m%d_%H%M"))
+    ap.add_argument("--arch", default="single", choices=["single", "routed"])
     ap.add_argument("--threshold", type=float, default=float(os.getenv("APPROVAL_THRESHOLD_USD", "250")))
     args = ap.parse_args()
 
@@ -221,7 +226,7 @@ def main() -> None:
     random.Random(0).shuffle(jobs)
     results: list[dict] = []
     with ThreadPoolExecutor(args.concurrency) as pool, open(out_dir / "results.jsonl", "w") as f:
-        futures = [pool.submit(run_episode, t, i, client, args.threshold) for t, i in jobs]
+        futures = [pool.submit(run_episode, t, i, client, args.threshold, args.arch) for t, i in jobs]
         for n, fut in enumerate(as_completed(futures), 1):
             r = fut.result()
             results.append(r)
@@ -233,7 +238,7 @@ def main() -> None:
                   flush=True)
     summary = summarize(results, args.trials) | {
         "label": args.label, "split": args.split if not args.tasks else f"tasks:{args.tasks}",
-        "trials": args.trials, "agent_model": os.getenv("AGENT_MODEL", "claude-haiku-5-5"),
+        "trials": args.trials, "arch": args.arch, "agent_model": os.getenv("AGENT_MODEL", "claude-haiku-5-5"),
         "agent_effort": os.getenv("AGENT_EFFORT", "medium"), "approval_threshold": args.threshold,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
