@@ -128,6 +128,12 @@ added under it as they come in.
   delivered order, their 20 orders, the 41 products they touch) into Shopify with the same order numbers, and loads
   the same slice into the mirror schema. Shopify allows 3 options per product, so 4-option τ² products get their
   last two merged ("material and style").
+- **Reseeding safely (demo orders get used up):** the first live reset deleted the old orders, then failed on a
+  customer address, leaving the mirror pointing at deleted orders. Now it creates the new orders, swaps the mirror
+  in one transaction, and only then deletes the old ones (Shopify allows the same order number on two orders
+  briefly). A failure at any step leaves the previous demo intact. Address cause: Shopify adds order shipping
+  addresses to the customer's address book and rejects editing one into a duplicate of another, so the seed now
+  re-selects the existing matching address as the default.
 
 ## D17. Write-through mirror: Shopify is the system of record, Postgres serves reads
 - **Write path:** the store method runs first inside a savepoint (same business rules as the benchmark, e.g. only

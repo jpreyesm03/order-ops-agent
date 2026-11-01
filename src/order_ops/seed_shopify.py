@@ -33,7 +33,16 @@ SEED_STATUSES = {"pending", "processed", "delivered"}
 PRODUCT_SET = """mutation($input: ProductSetInput!, $handle: String!) {
   productSet(input: $input, synchronous: true, identifier: {handle: $handle}) {
     product { id variants(first: 100) { nodes { id sku } } } userErrors { field message } } }"""
-CUSTOMER_FIND = """query($q: String!) { customers(first: 1, query: $q) { nodes { id defaultAddress { id } } } }"""
+CUSTOMER_FIND = """query($q: String!) { customers(first: 1, query: $q) { nodes { id
+  defaultAddress { id address1 address2 city provinceCode zip }
+  addressesV2(first: 20) { nodes { id address1 address2 city provinceCode zip } } } } }"""
+SET_DEFAULT = """mutation($cid: ID!, $aid: ID!) { customerUpdateDefaultAddress(customerId: $cid, addressId: $aid) {
+  customer { id } userErrors { field message } } }"""
+ADDRESS_FIELDS = ("address1", "address2", "city", "provinceCode", "zip")
+
+
+def same_address(a: dict, b: dict) -> bool:
+    return all((a.get(k) or "") == (b.get(k) or "") for k in ADDRESS_FIELDS)
 CUSTOMER_CREATE = """mutation($input: CustomerInput!) {
   customerCreate(input: $input) { customer { id } userErrors { field message } } }"""
 ADDRESS_CREATE = """mutation($cid: ID!, $address: MailingAddressInput!) {
@@ -47,7 +56,8 @@ ORDER_CREATE = """mutation($order: OrderCreateOrderInput!) {
     userErrors { field message } } }"""
 ADDRESS_UPDATE = CUSTOMER_ADDRESS_UPDATE
 ORDER_DELETE = """mutation($id: ID!) { orderDelete(orderId: $id) { deletedId userErrors { field message } } }"""
-SEEDED_ORDERS = """query($q: String!) { orders(first: 50, query: $q) { nodes { id } } }"""
+SEEDED_ORDERS = """query($q: String!, $after: String) { orders(first: 50, query: $q, after: $after) {
+  nodes { id } pageInfo { hasNextPage endCursor } } }"""
 LOCATION = """{ productVariants(first: 1) { nodes { inventoryItem { inventoryLevels(first: 1) {
   nodes { location { id } } } } } } }"""
 
@@ -116,9 +126,18 @@ def seed_customers(shop: ShopifyClient, users: dict) -> list[tuple[str, str, str
     for uid, u in users.items():
         found = shop.gql(CUSTOMER_FIND, {"q": f"email:{u['email']}"})["customers"]["nodes"]
         address = address_input(u["address"], u["name"]["first_name"], u["name"]["last_name"])
-        if found and found[0]["defaultAddress"]:  # re-seed: reset the existing default address
-            cid, aid = found[0]["id"], found[0]["defaultAddress"]["id"]
-            shop.mutate(ADDRESS_UPDATE, {"cid": cid, "aid": aid, "address": address}, "customerAddressUpdate")
+        if found and found[0]["defaultAddress"]:  # re-seed: make the τ² address the default again
+            cid, current = found[0]["id"], found[0]["defaultAddress"]
+            match = next((a for a in found[0]["addressesV2"]["nodes"] if same_address(a, address)), None)
+            # Order shipping addresses get added to the customer's address book (and can become the default),
+            # and Shopify rejects editing an address into a duplicate of another ("Address already exists").
+            if match:
+                aid = match["id"]
+                if aid != current["id"]:
+                    shop.mutate(SET_DEFAULT, {"cid": cid, "aid": aid}, "customerUpdateDefaultAddress")
+            else:
+                aid = current["id"]
+                shop.mutate(ADDRESS_UPDATE, {"cid": cid, "aid": aid, "address": address}, "customerAddressUpdate")
             rows += [("customer", uid, cid), ("customer_address", uid, aid)]
             print(f"  customer {u['name']['first_name']} {u['name']['last_name']} (existing)")
             continue
@@ -187,16 +206,18 @@ def create_order(shop: ShopifyClient, order: dict) -> dict:
     raise AssertionError("unreachable")
 
 
-def delete_seeded_orders(shop: ShopifyClient) -> None:
-    """Delete every order carrying the seed tag (also catches orders left by an interrupted run)."""
-    deleted = 0
+def delete_seeded_orders(shop: ShopifyClient, keep: frozenset[str] = frozenset()) -> None:
+    """Delete every order carrying the seed tag except `keep` (also catches orders left by an interrupted run)."""
+    deleted, after = 0, None
     while True:
-        nodes = shop.gql(SEEDED_ORDERS, {"q": f"tag:{TAG}"})["orders"]["nodes"]
-        if not nodes:
+        page = shop.gql(SEEDED_ORDERS, {"q": f"tag:{TAG}", "after": after})["orders"]
+        for n in page["nodes"]:
+            if n["id"] not in keep:
+                shop.mutate(ORDER_DELETE, {"id": n["id"]}, "orderDelete")
+                deleted += 1
+        if not page["pageInfo"]["hasNextPage"]:
             break
-        for n in nodes:
-            shop.mutate(ORDER_DELETE, {"id": n["id"]}, "orderDelete")
-            deleted += 1
+        after = page["pageInfo"]["endCursor"]
     print(f"  deleted {deleted} previously seeded orders")
 
 
@@ -204,7 +225,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--users", type=int, default=8)
     ap.add_argument("--schema", default="shop")
-    ap.add_argument("--reset", action="store_true", help="delete previously seeded orders first")
+    ap.add_argument("--reset", action="store_true",
+                    help="replace previously seeded orders (new ones are created and swapped in before old ones go)")
     args = ap.parse_args()
 
     started = time.time()
@@ -212,9 +234,6 @@ def main() -> None:
     shop = ShopifyClient()
     data = pick_slice(db.load_tau2_db(), args.users)
     print(f"slice: {len(data['users'])} customers, {len(data['orders'])} orders, {len(data['products'])} products")
-    if args.reset:
-        delete_seeded_orders(shop)
-
     location = shop.gql(LOCATION)["productVariants"]["nodes"][0]["inventoryItem"]["inventoryLevels"]["nodes"][0][
         "location"]["id"]
     rows = seed_products(shop, data["products"])
@@ -230,6 +249,8 @@ def main() -> None:
         conn.execute(f"DROP SCHEMA IF EXISTS {db.ident(args.schema)} CASCADE")
         conn.execute(f"ALTER SCHEMA {db.ident(staging)} RENAME TO {db.ident(args.schema)}")
     get_id(conn, args.schema, "order", next(iter(data["orders"])))  # sanity check
+    if args.reset:  # only now: if anything above failed, the previous demo is still intact
+        delete_seeded_orders(shop, keep=frozenset(gid for k, _, gid in rows if k == "order"))
     conn.close()
     print(f"done in {time.time() - started:.0f} s: {len(rows)} ids mapped, mirror schema '{args.schema}'")
 
