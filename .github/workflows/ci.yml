@@ -45,40 +45,83 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: https://example.invalid
 
-  # Builds the API image on every push. On main it is also pushed to ECR (short-lived OIDC credentials, no stored
-  # AWS keys); App Runner deploys new :latest images automatically.
+  # Builds the API image on every push and smoke-tests it (the app must import with production dependencies
+  # only). On main, when API files changed, it is pushed to ECR (short-lived OIDC credentials, no stored AWS keys)
+  # and rolled out on ECS. One deploy at a time; a rollout ECS rolls back fails the job.
   image:
     runs-on: ubuntu-latest
     needs: api
+    concurrency:
+      group: deploy-api
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
     env:
-      PUSH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       ECR_REPO: 054896499172.dkr.ecr.us-west-2.amazonaws.com/order-ops-api
+      API_URL: https://or-9c9c3432e69a4ff6b5742b1b9aa0054c.ecs.us-west-2.on.aws
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - if: env.PUSH == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::054896499172:role/order-ops-github-deploy
-          aws-region: us-west-2
-      - if: env.PUSH == 'true'
-        uses: aws-actions/amazon-ecr-login@v2
+          fetch-depth: 0
+      - name: Should this push deploy the API?
+        id: deploy
+        run: |
+          if [ "${{ github.event_name }}" != "push" ] || [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          BEFORE="${{ github.event.before }}"
+          if ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0   # first push or force-push: deploy
+          fi
+          CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}")
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -qE '^(src/|data/|Dockerfile|\.dockerignore|pyproject\.toml|uv\.lock|\.github/workflows/)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "No API changes: build and smoke test only."
+          fi
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ env.PUSH == 'true' }}
-          tags: |
-            ${{ env.ECR_REPO }}:${{ github.sha }}
-            ${{ env.ECR_REPO }}:latest
+          load: true
+          tags: order-ops-api:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Roll out on ECS
-        if: env.PUSH == 'true'
+      - name: Smoke test the image
         run: |
-          aws ecs update-service --cluster order-ops --service order-ops-api --force-new-deployment >/dev/null
-          aws ecs wait services-stable --cluster order-ops --services order-ops-api
-          curl -fsS https://or-9c9c3432e69a4ff6b5742b1b9aa0054c.ecs.us-west-2.on.aws/healthz
+          docker run --rm order-ops-api:ci python -c "import order_ops.api, order_ops.shopify, order_ops.seed_shopify, order_ops.mcp_server; print('imports ok')"
+      - if: steps.deploy.outputs.run == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::054896499172:role/order-ops-github-deploy
+          aws-region: us-west-2
+      - if: steps.deploy.outputs.run == 'true'
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Push to ECR
+        if: steps.deploy.outputs.run == 'true'
+        run: |
+          for tag in "${{ github.sha }}" latest; do
+            docker tag order-ops-api:ci "$ECR_REPO:$tag" && docker push -q "$ECR_REPO:$tag"
+          done
+      - name: Roll out on ECS
+        if: steps.deploy.outputs.run == 'true'
+        run: |
+          DEP=$(aws ecs update-service --cluster order-ops --service order-ops-api --force-new-deployment \
+                --query 'service.deployments[?status==`PRIMARY`].id | [0]' --output text)
+          echo "deployment $DEP"
+          for i in $(seq 1 100); do   # up to 25 min: canary + bake time + draining
+            STATE=$(aws ecs describe-services --cluster order-ops --services order-ops-api \
+                    --query "services[0].deployments[?id=='$DEP'].rolloutState | [0]" --output text)
+            echo "$(date +%H:%M:%S) $STATE"
+            case "$STATE" in
+              COMPLETED) curl -fsS "$API_URL/healthz"; echo; exit 0 ;;
+              FAILED|None) echo "Rollout failed or was rolled back. Recent events:"
+                           aws ecs describe-services --cluster order-ops --services order-ops-api \
+                             --query 'services[0].events[:8].message' --output text; exit 1 ;;
+            esac
+            sleep 15
+          done
+          echo "Rollout still in progress after 25 min"; exit 1

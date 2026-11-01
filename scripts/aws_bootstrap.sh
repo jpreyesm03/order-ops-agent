@@ -54,8 +54,9 @@ if exists aws secretsmanager describe-secret --secret-id "$APP/shopify"; then
 else
   put_secret "$APP/shopify" "$TMP/shopify"
 fi
-SECRET_ARNS="$(aws secretsmanager list-secrets --filters Key=name,Values="$APP/" \
-  --query 'SecretList[].ARN' --output json)"
+# Every secret of this app (prefix match), including ones added later. Listing ARNs instead raced with a
+# just-created secret and left it out of the policy.
+SECRET_ARNS="[\"arn:aws:secretsmanager:$AWS_REGION:$ACCOUNT_ID:secret:$APP/*\"]"
 
 role() {  # name, service principal
   if ! exists aws iam get-role --role-name "$1"; then
