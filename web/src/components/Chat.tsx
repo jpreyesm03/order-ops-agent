@@ -69,7 +69,9 @@ export default function Chat() {
     };
   }, []);
 
-  useEffect(() => bottom.current?.scrollIntoView({ behavior: "smooth" }), [messages, busy]);
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, busy]);
 
   async function send(text: string) {
     if (!sessionId || !text.trim() || busy) return;
