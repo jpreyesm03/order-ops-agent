@@ -1,0 +1,21 @@
+# Local Postgres for development and evals. Run it through scripts/dev_db.sh (Colima engine, own project name).
+name: orderops-p5
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: orderops
+      POSTGRES_PASSWORD: orderops
+      POSTGRES_DB: orderops_p5
+    ports:
+      - "127.0.0.1:55433:5432"   # localhost only, high port
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orderops -d orderops_p5"]
+      interval: 2s
+      retries: 30
+
+volumes:
+  pgdata:

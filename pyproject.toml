@@ -1,0 +1,37 @@
+[project]
+name = "order-ops-agent"
+version = "0.1.0"
+description = "A customer-service agent that cancels, refunds and exchanges orders under a written policy, with the risky parts enforced in code"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.70",
+    "psycopg[binary,pool]>=3.2",
+    "pydantic>=2.8",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-dotenv>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/order_ops"]
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

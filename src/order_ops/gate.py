@@ -1,0 +1,234 @@
+"""Policy gate: the rules a jailbroken model still cannot break, because they run in code, not in the prompt.
+
+Every tool call from the model goes through `Gate.run`:
+  1. tier          read / write (store.READ_TOOLS, store.WRITE_TOOLS)
+  2. identity      user/order data and every write need an authenticated customer (found by email or name+zip)
+  3. one customer  after authentication, lookups that resolve to a different customer are blocked
+  4. ownership     orders, users and payment methods must belong to the authenticated customer
+  5. confirmation  a write needs an explicit "yes" in the customer's latest message; each "yes" pays for one write
+  6. approval      money movements above the threshold wait for a human (live) or are counted (eval)
+  7. idempotency   the same write with the same arguments in the same session runs once
+  8. audit         every call is logged with its outcome
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import uuid
+from dataclasses import asdict, dataclass, field
+from decimal import Decimal
+from typing import Any
+
+import psycopg
+from psycopg.types.json import Jsonb
+
+from . import db
+from .store import READ_TOOLS, WRITE_TOOLS, Store, ToolError, call
+
+AUTH_TOOLS = {"find_user_id_by_email", "find_user_id_by_name_zip"}
+NEEDS_AUTH = {"get_user_details", "get_order_details"} | WRITE_TOOLS
+
+_YES = re.compile(
+    r"\b(yes|yeah|yep|yup|sure|ok|okay|confirm(ed)?|correct|proceed|go ahead|do it|please do|that'?s right|"
+    r"sounds good|that works|absolutely|affirmative|si|sí)\b",
+    re.IGNORECASE,
+)
+_NO_START = re.compile(r"^\W*(no|nope|don'?t|do not|wait|hold on|not yet|actually,? no)\b", re.IGNORECASE)
+
+
+def is_confirmation(text: str) -> bool:
+    """Deterministic check for an explicit yes. Errs on the side of 'not confirmed'."""
+    return bool(_YES.search(text)) and not _NO_START.search(text)
+
+
+@dataclass
+class Session:
+    session_id: str
+    user_id: str | None = None            # authenticated customer
+    confirmation: bool = False            # an unused explicit "yes" from the customer's latest message
+    auto_approve: bool = False            # eval mode: approvals are counted, then executed
+    approval_threshold: float = 250.0
+    stats: dict[str, Any] = field(default_factory=lambda: {"blocked": {}, "approvals": 0, "duplicates": 0,
+                                                          "writes": 0, "errors": 0})
+
+    def on_customer_message(self, text: str) -> None:
+        self.confirmation = is_confirmation(text)
+
+    def to_json(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_json(cls, d: dict) -> Session:
+        return cls(**d)
+
+
+class Blocked(Exception):
+    def __init__(self, rule: str, message: str):
+        super().__init__(message)
+        self.rule = rule
+
+
+class Gate:
+    def __init__(self, conn: psycopg.Connection, schema: str):
+        self.conn = conn
+        self.s = db.ident(schema)
+        self.store = Store(conn, schema)
+
+    # ---------- public ----------
+    def run(self, session: Session, tool: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Execute one model tool call under the policy. Always returns a JSON-able dict for the model."""
+        tier = "write" if tool in WRITE_TOOLS else "read"
+        try:
+            if tool not in READ_TOOLS | WRITE_TOOLS:
+                raise ToolError(f"Unknown tool {tool}")
+            self._check(session, tool, args)
+            if tool in WRITE_TOOLS:
+                return self._write(session, tool, args)
+            result = call(self.store, tool, args)
+            if tool in AUTH_TOOLS:
+                self._authenticate(session, result)
+            self._audit(session, tool, tier, args, "ok")
+            return {"ok": True, "result": result}
+        except Blocked as b:
+            session.stats["blocked"][b.rule] = session.stats["blocked"].get(b.rule, 0) + 1
+            self._audit(session, tool, tier, args, "blocked", f"{b.rule}: {b}")
+            return {"ok": False, "blocked_by_policy": b.rule, "error": str(b)}
+        except ToolError as e:
+            session.stats["errors"] += 1
+            self._audit(session, tool, tier, args, "error", str(e))
+            return {"ok": False, "error": str(e)}
+
+    def decide(self, approval_id: str, approve: bool, reviewer: str, note: str = "") -> dict[str, Any]:
+        """A human approves or rejects a pending money movement (live app)."""
+        row = self.conn.execute(
+            f"SELECT session_id, tool, args, status FROM {self.s}.approvals WHERE approval_id = %s", (approval_id,)
+        ).fetchone()
+        if row is None:
+            raise ToolError("Approval not found")
+        session_id, tool, args, status = row
+        if status != "pending":
+            raise ToolError(f"Approval already {status}")
+        if not approve:
+            self.conn.execute(
+                f"UPDATE {self.s}.approvals SET status='rejected', decided_by=%s, decision_note=%s, decided_at=now() "
+                f"WHERE approval_id=%s", (reviewer, note, approval_id))
+            return {"status": "rejected"}
+        try:
+            result = self._execute_once(f"approval:{approval_id}", tool, args)
+            status, payload = "approved", result
+        except ToolError as e:  # data changed since the request (e.g. order shipped meanwhile)
+            status, payload = "failed", {"error": str(e)}
+        self.conn.execute(
+            f"UPDATE {self.s}.approvals SET status=%s, decided_by=%s, decision_note=%s, decided_at=now(), result=%s "
+            f"WHERE approval_id=%s", (status, reviewer, note, Jsonb(payload), approval_id))
+        self._audit_raw(session_id, tool, "write", args, "ok" if status == "approved" else "error",
+                        f"approval {approval_id} {status} by {reviewer}")
+        return {"status": status, "result": payload}
+
+    # ---------- checks ----------
+    def _check(self, session: Session, tool: str, args: dict[str, Any]) -> None:
+        if tool in NEEDS_AUTH and session.user_id is None:
+            raise Blocked("identity", "Authenticate the customer first (find_user_id_by_email or "
+                                      "find_user_id_by_name_zip) before accessing account data or making changes.")
+        if tool == "get_user_details" or tool == "modify_user_address":
+            if args.get("user_id") != session.user_id:
+                raise Blocked("ownership", "You can only access the authenticated customer's own profile.")
+        if "order_id" in args and tool in NEEDS_AUTH:
+            owner = self.conn.execute(f"SELECT user_id FROM {self.s}.orders WHERE order_id = %s",
+                                      (args["order_id"],)).fetchone()
+            if owner is not None and owner[0] != session.user_id:
+                raise Blocked("ownership", "This order belongs to a different customer. You can only help the "
+                                           "authenticated customer with their own orders.")
+        if "payment_method_id" in args and tool in WRITE_TOOLS:
+            ok = self.conn.execute(
+                f"SELECT 1 FROM {self.s}.payment_methods WHERE user_id = %s AND payment_method_id = %s",
+                (session.user_id, args["payment_method_id"])).fetchone()
+            if ok is None:
+                raise Blocked("ownership", "That payment method does not belong to the authenticated customer.")
+        if tool in WRITE_TOOLS and not session.confirmation:
+            raise Blocked("confirmation", "Before this change, list the exact action details to the customer and "
+                                          "get an explicit 'yes' in their latest message. Each confirmation covers "
+                                          "one change.")
+
+    def _authenticate(self, session: Session, user_id: str) -> None:
+        if session.user_id is not None and session.user_id != user_id:
+            raise Blocked("one_customer", "This conversation is already authenticated as another customer. "
+                                          "Only one customer can be helped per conversation.")
+        session.user_id = user_id
+
+    # ---------- writes ----------
+    def amount_at_stake(self, tool: str, args: dict[str, Any]) -> Decimal:
+        """Money that moves if this write runs (refund, charge or transfer between payment methods)."""
+        if tool in ("modify_pending_order_address", "modify_user_address"):
+            return Decimal("0")
+        order = self.store._order(args["order_id"])
+        if tool in ("cancel_pending_order", "modify_pending_order_payment"):
+            return sum((Decimal(str(p["amount"])) for p in order["payment_history"]
+                        if p["transaction_type"] == "payment"), Decimal("0"))
+        prices = {it["item_id"]: Decimal(str(it["price"])) for it in order["items"]}
+        if tool == "return_delivered_order_items":
+            return sum((prices.get(i, Decimal("0")) for i in args.get("item_ids", [])), Decimal("0"))
+        # exchange / modify items: the net price difference charged or refunded
+        diff = Decimal("0")
+        for old, new in zip(args.get("item_ids", []), args.get("new_item_ids", []), strict=False):
+            row = self.conn.execute(f"SELECT price FROM {self.s}.variants WHERE item_id = %s LIMIT 1",
+                                    (new,)).fetchone()
+            if row is not None:
+                diff += row[0] - prices.get(old, Decimal("0"))
+        return abs(diff)
+
+    def _write(self, session: Session, tool: str, args: dict[str, Any]) -> dict[str, Any]:
+        key = self._key(session.session_id, tool, args)
+        prior = self.conn.execute(f"SELECT result FROM {self.s}.idempotency_keys WHERE key = %s", (key,)).fetchone()
+        if prior is not None:
+            session.stats["duplicates"] += 1
+            self._audit(session, tool, "write", args, "duplicate", "same write already executed in this session")
+            return {"ok": True, "duplicate": True, "note": "This exact change was already applied; nothing was "
+                                                           "done again.", "result": prior[0]}
+        amount = self.amount_at_stake(tool, args)
+        if amount > Decimal(str(session.approval_threshold)):
+            session.stats["approvals"] += 1
+            if not session.auto_approve:
+                session.confirmation = False
+                approval_id = self._request_approval(session, tool, args, amount)
+                self._audit(session, tool, "write", args, "pending_approval", f"{approval_id} ${amount}")
+                return {"ok": True, "pending_approval": True, "approval_id": approval_id,
+                        "note": f"${amount} is above the ${session.approval_threshold:.0f} limit, so a human "
+                                "supervisor must approve it. Tell the customer it is submitted and pending review."}
+        result = self._execute_once(key, tool, args)
+        session.confirmation = False  # one "yes" pays for one successful change
+        session.stats["writes"] += 1
+        self._audit(session, tool, "write", args, "ok", f"${amount}")
+        return {"ok": True, "result": result}
+
+    def _execute_once(self, key: str, tool: str, args: dict[str, Any]) -> Any:
+        with self.conn.transaction():  # the write and its idempotency key commit together
+            result = call(self.store, tool, args)
+            self.conn.execute(f"INSERT INTO {self.s}.idempotency_keys (key, tool, args, result) VALUES (%s,%s,%s,%s)",
+                              (key, tool, Jsonb(args), Jsonb(result)))
+        return result
+
+    def _request_approval(self, session: Session, tool: str, args: dict[str, Any], amount: Decimal) -> str:
+        approval_id = "apr_" + uuid.uuid4().hex[:10]
+        summary = f"{tool} on {args.get('order_id', args.get('user_id'))}: ${amount}"
+        self.conn.execute(
+            f"INSERT INTO {self.s}.approvals (approval_id, session_id, user_id, order_id, tool, args, amount, summary) "
+            f"VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            (approval_id, session.session_id, session.user_id, args.get("order_id"), tool, Jsonb(args), amount,
+             summary))
+        return approval_id
+
+    # ---------- audit ----------
+    @staticmethod
+    def _key(session_id: str, tool: str, args: dict[str, Any]) -> str:
+        return hashlib.sha256(f"{session_id}|{tool}|{json.dumps(args, sort_keys=True)}".encode()).hexdigest()
+
+    def _audit(self, session: Session, tool: str, tier: str, args: dict, outcome: str, detail: str = "") -> None:
+        self._audit_raw(session.session_id, tool, tier, args, outcome, detail)
+
+    def _audit_raw(self, session_id: str, tool: str, tier: str, args: dict, outcome: str, detail: str) -> None:
+        self.conn.execute(
+            f"INSERT INTO {self.s}.audit_log (session_id, tool, tier, args, outcome, detail) "
+            f"VALUES (%s,%s,%s,%s,%s,%s)",
+            (session_id, tool, tier, Jsonb(args), outcome, detail))
