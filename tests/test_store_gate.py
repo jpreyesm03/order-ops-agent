@@ -179,3 +179,33 @@ def test_tool_results_are_json_serializable(conn, schema):
     out = gate.run(s, "get_user_details", {"user_id": "noah_brown_6181"})
     json.dumps(out)
     assert out["result"]["orders"] == ["#W7678072"]
+
+
+def test_concurrent_cancels_refund_once(conn, schema):
+    """Two sessions cancel the same order at the same moment: one succeeds, the other gets a clean policy error
+    (the order row is locked), and the order is refunded exactly once."""
+    import threading
+
+    oid = _first(conn, schema, "pending")[0]
+    outcomes: list[str] = []
+
+    def cancel():
+        c = db.connect()
+        try:
+            Store(c, schema).cancel_pending_order(oid, "no longer needed")
+            outcomes.append("ok")
+        except ToolError as e:
+            outcomes.append(str(e))
+        finally:
+            c.close()
+
+    threads = [threading.Thread(target=cancel) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(outcomes) == ["Non-pending order cannot be cancelled", "ok"]
+    refunds = conn.execute(f"SELECT count(*) FROM {schema}.order_payments WHERE order_id = %s "
+                           f"AND transaction_type = 'refund'", (oid,)).fetchone()[0]
+    assert refunds == len([p for p in db.get_order(conn, schema, oid)["payment_history"]
+                           if p["transaction_type"] == "payment"])

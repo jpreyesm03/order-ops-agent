@@ -54,13 +54,17 @@ class Store:
         self.s = db.ident(schema)
 
     # ---------- helpers ----------
-    def _order(self, order_id: str) -> dict:
+    def _order(self, order_id: str, lock: bool = False) -> dict:
+        if lock:  # writes: a second change to the same order waits here, then sees the updated order
+            self.conn.execute(f"SELECT 1 FROM {self.s}.orders WHERE order_id = %s FOR UPDATE", (order_id,))
         o = db.get_order(self.conn, self.s, order_id)
         if o is None:
             raise ToolError("Order not found")
         return o
 
-    def _user(self, user_id: str) -> dict:
+    def _user(self, user_id: str, lock: bool = False) -> dict:
+        if lock:
+            self.conn.execute(f"SELECT 1 FROM {self.s}.users WHERE user_id = %s FOR UPDATE", (user_id,))
         u = db.get_user(self.conn, self.s, user_id)
         if u is None:
             raise ToolError("User not found")
@@ -159,7 +163,7 @@ class Store:
     # ---------- write tools ----------
     def cancel_pending_order(self, order_id: str, reason: str) -> dict:
         with self.conn.transaction():
-            order = self._order(order_id)
+            order = self._order(order_id, lock=True)
             if order["status"] != "pending":
                 raise ToolError("Non-pending order cannot be cancelled")
             if reason not in CANCEL_REASONS:
@@ -178,7 +182,7 @@ class Store:
     def exchange_delivered_order_items(self, order_id: str, item_ids: list[str], new_item_ids: list[str],
                                        payment_method_id: str) -> dict:
         with self.conn.transaction():
-            order = self._order(order_id)
+            order = self._order(order_id, lock=True)
             if order["status"] != "delivered":
                 raise ToolError("Non-delivered order cannot be exchanged")
             self._check_counts(order, item_ids, "Number of {item_id} not found.")
@@ -204,7 +208,7 @@ class Store:
     def modify_pending_order_address(self, order_id: str, address1: str, address2: str, city: str, state: str,
                                      country: str, zip: str) -> dict:
         with self.conn.transaction():
-            order = self._order(order_id)
+            order = self._order(order_id, lock=True)
             if "pending" not in order["status"]:
                 raise ToolError("Non-pending order cannot be modified")
             address = {"address1": address1, "address2": address2, "city": city, "country": country,
@@ -216,7 +220,7 @@ class Store:
     def modify_pending_order_items(self, order_id: str, item_ids: list[str], new_item_ids: list[str],
                                    payment_method_id: str) -> dict:
         with self.conn.transaction():
-            order = self._order(order_id)
+            order = self._order(order_id, lock=True)
             if order["status"] != "pending":
                 raise ToolError("Non-pending order cannot be modified")
             self._check_counts(order, item_ids, "{item_id} not found")
@@ -255,7 +259,7 @@ class Store:
 
     def modify_pending_order_payment(self, order_id: str, payment_method_id: str) -> dict:
         with self.conn.transaction():
-            order = self._order(order_id)
+            order = self._order(order_id, lock=True)
             if "pending" not in order["status"]:
                 raise ToolError("Non-pending order cannot be modified")
             pm = self._payment_method(order["user_id"], payment_method_id)
@@ -279,7 +283,7 @@ class Store:
     def modify_user_address(self, user_id: str, address1: str, address2: str, city: str, state: str,
                             country: str, zip: str) -> dict:
         with self.conn.transaction():
-            self._user(user_id)
+            self._user(user_id, lock=True)
             address = {"address1": address1, "address2": address2, "city": city, "country": country,
                        "state": state, "zip": zip}
             self.conn.execute(f"UPDATE {self.s}.users SET address = %s WHERE user_id = %s", (Jsonb(address), user_id))
@@ -287,7 +291,7 @@ class Store:
 
     def return_delivered_order_items(self, order_id: str, item_ids: list[str], payment_method_id: str) -> dict:
         with self.conn.transaction():
-            order = self._order(order_id)
+            order = self._order(order_id, lock=True)
             if order["status"] != "delivered":
                 raise ToolError("Non-delivered order cannot be returned")
             pm = self._payment_method(order["user_id"], payment_method_id)

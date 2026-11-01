@@ -62,6 +62,12 @@ added under it as they come in.
 ## D8. Idempotency per (session, tool, arguments)
 - **Why:** retries happen (timeouts, a model repeating itself). The key and the write commit in one transaction,
   so a repeated call returns the stored result instead of refunding twice (test `test_cannot_refund_twice`).
+- **Across sessions:** idempotency keys are per conversation, so two conversations (e.g. two browser tabs) could
+  change the same order at once. Found on the live Shopify store: two simultaneous cancels → one succeeded, the other
+  crashed on a database constraint (no double refund, but an error instead of an answer). Every write now locks the
+  order (or user) row first (`SELECT … FOR UPDATE`): the second change waits, then sees "Non-pending order cannot be
+  cancelled". The gate also turns any database error into a polite tool error instead of crashing the conversation
+  (test `test_concurrent_cancels_refund_once`).
 
 ## D9. Fixed a bug in τ²'s reference tool
 - `modify_pending_order_items` in τ² reuses the last new variant's price and options for every swapped item. This

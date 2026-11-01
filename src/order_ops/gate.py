@@ -98,6 +98,10 @@ class Gate:
             session.stats["errors"] += 1
             self._audit(session, tool, tier, args, "error", str(e))
             return {"ok": False, "error": str(e)}
+        except psycopg.Error as e:  # never crash the conversation on a database error; the write rolled back
+            session.stats["errors"] += 1
+            self._audit(session, tool, tier, args, "error", f"database: {type(e).__name__}")
+            return {"ok": False, "error": "A temporary problem occurred and nothing was changed. Try again."}
 
     def decide(self, approval_id: str, approve: bool, reviewer: str, note: str = "") -> dict[str, Any]:
         """A human approves or rejects a pending money movement (live app)."""
