@@ -102,10 +102,17 @@ class Agent:
         self.usage.add(self.model, resp.usage, round((time.perf_counter() - started) * 1000))
         return resp
 
-    def respond(self, session: Session, messages: list[dict], customer_text: str) -> Turn:
-        """Handle one customer message. `messages` is the full API history and is extended in place."""
+    def respond(self, session: Session, messages: list[dict], customer_text: str,
+                notices: list[str] | None = None) -> Turn:
+        """Handle one customer message. `messages` is the full API history and is extended in place.
+
+        `notices` are operator updates (e.g. "approval apr_x was approved by a supervisor"). They go in as
+        mid-conversation system messages, a channel the customer cannot write to.
+        """
         session.on_customer_message(customer_text)
         messages.append({"role": "user", "content": customer_text})
+        for notice in notices or []:
+            messages.append({"role": "system", "content": notice})
         calls: list[dict] = []
         transferred = False
         for _ in range(MAX_STEPS):
