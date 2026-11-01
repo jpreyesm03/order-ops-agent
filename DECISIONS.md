@@ -95,6 +95,11 @@ added under it as they come in.
   One task (in-memory rate limits, capped spend), ~$25/month.
 - **Delivery:** every push to `main` runs tests, builds the image, pushes it to ECR with short-lived GitHub OIDC
   credentials (no AWS keys stored in GitHub; the role only trusts this repo's `main`) and rolls it out blue/green.
+- **Lessons from the first deploys:** (1) a library used only by the new Shopify code (`httpx`) was a dev
+  dependency, so tests passed but the production image crashed on start; ECS's circuit breaker rolled back and the
+  site stayed up. CI now starts the built image and imports the app before pushing. (2) Canary + bake time + draining
+  takes 10–20 min, longer than the AWS CLI's default wait; CI now follows the deployment's own rollout state for up
+  to 25 min and fails on a rollback. (3) Docs-only pushes no longer deploy, and only one rollout runs at a time.
   Secrets (database URL, API keys, Shopify app) are in Secrets Manager, readable only by the task's role.
 
 ## D14. MCP server
