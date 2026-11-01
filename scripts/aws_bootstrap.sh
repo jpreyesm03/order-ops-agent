@@ -2,10 +2,10 @@
 # One-time (idempotent) AWS setup for the API. Safe to re-run: every step checks before creating.
 #
 #   ECR repository ──▶ images pushed by GitHub Actions (OIDC role, no stored AWS keys in GitHub)
-#   Secrets Manager ──▶ DATABASE_URL, ADMIN_TOKEN, ANTHROPIC_API_KEY (read by App Runner at start)
-#   IAM roles ──▶ App Runner pulls from ECR; the running service reads only its own secrets
+#   Secrets Manager ──▶ DATABASE_URL, ADMIN_TOKEN, ANTHROPIC_API_KEY (injected into the ECS task at start)
+#   IAM roles ──▶ ECS pulls the image and reads only these secrets; ECS Express manages the load balancer
 #
-# The App Runner service itself is created by scripts/apprunner_service.sh once the first image exists.
+# The ECS service itself is created by scripts/ecs_service.sh once the first image exists.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/aws_env.sh
@@ -45,26 +45,27 @@ put_secret "$APP/anthropic-api-key" "$TMP/anthropic"
 SECRET_ARNS="$(aws secretsmanager list-secrets --filters Key=name,Values="$APP/" \
   --query 'SecretList[].ARN' --output json)"
 
-# ---------- IAM: App Runner pulls images from ECR ----------
-if ! exists aws iam get-role --role-name "$APP-apprunner-ecr"; then
-  aws iam create-role --role-name "$APP-apprunner-ecr" --assume-role-policy-document '{"Version":"2012-10-17",
-    "Statement":[{"Effect":"Allow","Principal":{"Service":"build.apprunner.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
-    >/dev/null
-  aws iam attach-role-policy --role-name "$APP-apprunner-ecr" \
-    --policy-arn arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess
-  echo "iam: created $APP-apprunner-ecr"
-fi
+role() {  # name, service principal
+  if ! exists aws iam get-role --role-name "$1"; then
+    aws iam create-role --role-name "$1" --assume-role-policy-document "{\"Version\":\"2012-10-17\",
+      \"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"$2\"},\"Action\":\"sts:AssumeRole\"}]}" >/dev/null
+    echo "iam: created $1"
+  fi
+}
 
-# ---------- IAM: the running service may read its own secrets, nothing else ----------
-if ! exists aws iam get-role --role-name "$APP-apprunner-instance"; then
-  aws iam create-role --role-name "$APP-apprunner-instance" --assume-role-policy-document '{"Version":"2012-10-17",
-    "Statement":[{"Effect":"Allow","Principal":{"Service":"tasks.apprunner.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
-    >/dev/null
-  echo "iam: created $APP-apprunner-instance"
-fi
-aws iam put-role-policy --role-name "$APP-apprunner-instance" --policy-name read-own-secrets --policy-document \
+# ---------- IAM: ECS task execution (pull image, write logs, read only this app's secrets) ----------
+role "$APP-ecs-execution" ecs-tasks.amazonaws.com
+aws iam attach-role-policy --role-name "$APP-ecs-execution" \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+aws iam put-role-policy --role-name "$APP-ecs-execution" --policy-name read-own-secrets --policy-document \
   "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"secretsmanager:GetSecretValue\",
     \"Resource\":$SECRET_ARNS}]}"
+
+# ---------- IAM: ECS Express infrastructure (load balancer, security groups, scaling) ----------
+role "$APP-ecs-infrastructure" ecs.amazonaws.com
+aws iam attach-role-policy --role-name "$APP-ecs-infrastructure" \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRoleforExpressGatewayServices
+aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com >/dev/null 2>&1 || true
 
 # ---------- IAM: GitHub Actions (OIDC) may push images, only from main of this repo ----------
 OIDC_ARN="arn:aws:iam::$ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
@@ -73,20 +74,26 @@ if ! exists aws iam get-open-id-connect-provider --open-id-connect-provider-arn 
     --client-id-list sts.amazonaws.com --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1 >/dev/null
   echo "iam: created GitHub OIDC provider"
 fi
+# GitHub's subject prefix (immutable form "repo:owner@id/name@id" when enabled for the repo)
+SUB_PREFIX="$(gh api "repos/$GITHUB_REPO/actions/oidc/customization/sub" --jq '.sub_claim_prefix // empty' 2>/dev/null)"
+SUB_PREFIX="${SUB_PREFIX:-repo:$GITHUB_REPO}"
+TRUST="{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Federated\":\"$OIDC_ARN\"},
+  \"Action\":\"sts:AssumeRoleWithWebIdentity\",\"Condition\":{
+    \"StringEquals\":{\"token.actions.githubusercontent.com:aud\":\"sts.amazonaws.com\",
+                      \"token.actions.githubusercontent.com:sub\":\"$SUB_PREFIX:ref:refs/heads/main\"}}}]}"
 if ! exists aws iam get-role --role-name "$APP-github-deploy"; then
-  aws iam create-role --role-name "$APP-github-deploy" --assume-role-policy-document "{\"Version\":\"2012-10-17\",
-    \"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Federated\":\"$OIDC_ARN\"},
-    \"Action\":\"sts:AssumeRoleWithWebIdentity\",\"Condition\":{
-      \"StringEquals\":{\"token.actions.githubusercontent.com:aud\":\"sts.amazonaws.com\",
-                        \"token.actions.githubusercontent.com:sub\":\"repo:$GITHUB_REPO:ref:refs/heads/main\"}}}]}" \
-    >/dev/null
+  aws iam create-role --role-name "$APP-github-deploy" --assume-role-policy-document "$TRUST" >/dev/null
   echo "iam: created $APP-github-deploy"
 fi
+aws iam update-assume-role-policy --role-name "$APP-github-deploy" --policy-document "$TRUST"
+echo "iam: $APP-github-deploy trusts $SUB_PREFIX:ref:refs/heads/main"
 aws iam put-role-policy --role-name "$APP-github-deploy" --policy-name push-api-image --policy-document \
   "{\"Version\":\"2012-10-17\",\"Statement\":[
     {\"Effect\":\"Allow\",\"Action\":\"ecr:GetAuthorizationToken\",\"Resource\":\"*\"},
     {\"Effect\":\"Allow\",\"Action\":[\"ecr:BatchCheckLayerAvailability\",\"ecr:BatchGetImage\",
       \"ecr:InitiateLayerUpload\",\"ecr:UploadLayerPart\",\"ecr:CompleteLayerUpload\",\"ecr:PutImage\"],
-     \"Resource\":\"arn:aws:ecr:$AWS_REGION:$ACCOUNT_ID:repository/$ECR_REPO\"}]}"
+     \"Resource\":\"arn:aws:ecr:$AWS_REGION:$ACCOUNT_ID:repository/$ECR_REPO\"},
+    {\"Effect\":\"Allow\",\"Action\":[\"ecs:UpdateService\",\"ecs:DescribeServices\"],
+     \"Resource\":\"arn:aws:ecs:$AWS_REGION:$ACCOUNT_ID:service/$APP/$APP-api\"}]}"
 
 echo "done. GitHub deploy role: arn:aws:iam::$ACCOUNT_ID:role/$APP-github-deploy"

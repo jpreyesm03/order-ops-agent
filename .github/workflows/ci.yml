@@ -76,3 +76,9 @@ jobs:
             ${{ env.ECR_REPO }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Roll out on ECS
+        if: env.PUSH == 'true'
+        run: |
+          aws ecs update-service --cluster order-ops --service order-ops-api --force-new-deployment >/dev/null
+          aws ecs wait services-stable --cluster order-ops --services order-ops-api
+          curl -fsS https://or-9c9c3432e69a4ff6b5742b1b9aa0054c.ecs.us-west-2.on.aws/healthz
