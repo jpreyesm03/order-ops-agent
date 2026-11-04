@@ -197,3 +197,6 @@ added under it as they come in.
 - **First deploy:** 502 on every request. Logs showed the app exiting at startup: `ssm:GetParametersByPath`
   was denied because the IAM policy named only `parameter/order-ops`; it now allows the path and everything under
   it (`parameter/order-ops/*`). ECS kept serving the site until Lambda passed its checks; the ECS script is in `scripts/archive/`.
+- **Cutover:** the web app was switched to the alias URL and the live bundle checked (alias URL present, ECS URL
+  gone); then the ECS service, its load balancer, the cluster, the ECS IAM roles and the Secrets Manager secrets
+  were deleted. Checked after: no load balancers, target groups or public IPs left in the account.
