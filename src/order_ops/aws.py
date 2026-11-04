@@ -33,8 +33,11 @@ def load_ssm_params() -> int:
 
 
 def invoke_self_async(payload: dict) -> None:
-    """Queue an async invocation of this function; it arrives at POST /events."""
+    """Queue an async invocation of this function; it arrives at POST /events. It goes to the alias traffic uses
+    (LAMBDA_ALIAS), so it runs the live version with that alias's async settings (no retries)."""
     import boto3
 
-    boto3.client("lambda").invoke(FunctionName=os.environ["AWS_LAMBDA_FUNCTION_NAME"], InvocationType="Event",
-                                  Payload=json.dumps(payload).encode())
+    target = os.environ["AWS_LAMBDA_FUNCTION_NAME"]
+    if os.getenv("LAMBDA_ALIAS"):
+        target += ":" + os.environ["LAMBDA_ALIAS"]
+    boto3.client("lambda").invoke(FunctionName=target, InvocationType="Event", Payload=json.dumps(payload).encode())

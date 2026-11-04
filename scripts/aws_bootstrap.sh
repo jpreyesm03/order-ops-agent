@@ -5,7 +5,7 @@
 #   SSM Parameter Store ──▶ DATABASE_URL, ADMIN_TOKEN, ANTHROPIC_API_KEY, Shopify app (SecureString, free tier),
 #                           read by the function at cold start
 #   IAM roles ──▶ the function reads only these parameters; the nightly schedule may only invoke the function;
-#                 GitHub may only push the image and update the function's code
+#                 GitHub may only push the image and release new versions of the function
 #
 # The function itself is created by scripts/lambda_service.sh once the first image exists.
 set -euo pipefail
@@ -28,7 +28,7 @@ aws ecr put-lifecycle-policy --repository-name "$ECR_REPO" --lifecycle-policy-te
 aws ecr set-repository-policy --repository-name "$ECR_REPO" --policy-text "{\"Version\":\"2008-10-17\",\"Statement\":[{
   \"Sid\":\"LambdaPull\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"lambda.amazonaws.com\"},
   \"Action\":[\"ecr:BatchGetImage\",\"ecr:GetDownloadUrlForLayer\"],
-  \"Condition\":{\"StringLike\":{\"aws:sourceArn\":\"$FUNCTION_ARN\"}}}]}" >/dev/null
+  \"Condition\":{\"StringLike\":{\"aws:sourceArn\":\"$FUNCTION_ARN*\"}}}]}" >/dev/null
 echo "ecr: $ECR_URI (scan on push, keep last 10, pullable by $APP-api)"
 
 # ---------- Parameters (SecureString) ----------
@@ -72,15 +72,16 @@ aws iam put-role-policy --role-name "$APP-lambda" --policy-name params-and-self-
     {\"Effect\":\"Allow\",\"Action\":\"ssm:GetParametersByPath\",
      \"Resource\":[\"arn:aws:ssm:$AWS_REGION:$ACCOUNT_ID:parameter/$APP\",
                  \"arn:aws:ssm:$AWS_REGION:$ACCOUNT_ID:parameter/$APP/*\"]},
-    {\"Effect\":\"Allow\",\"Action\":\"lambda:InvokeFunction\",\"Resource\":\"$FUNCTION_ARN\"}]}"
+    {\"Effect\":\"Allow\",\"Action\":\"lambda:InvokeFunction\",
+     \"Resource\":[\"$FUNCTION_ARN\",\"$FUNCTION_ARN:*\"]}]}"
 
 # ---------- IAM: EventBridge Scheduler (nightly reseed) may invoke the function, nothing else ----------
 role "$APP-scheduler" scheduler.amazonaws.com
 aws iam put-role-policy --role-name "$APP-scheduler" --policy-name invoke-api --policy-document \
   "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"lambda:InvokeFunction\",
-    \"Resource\":\"$FUNCTION_ARN\"}]}"
+    \"Resource\":[\"$FUNCTION_ARN\",\"$FUNCTION_ARN:*\"]}]}"
 
-# ---------- IAM: GitHub Actions (OIDC) may push images and update the function, only from main of this repo ----------
+# ---------- IAM: GitHub Actions (OIDC) may push images and release new versions, only from main of this repo ----------
 OIDC_ARN="arn:aws:iam::$ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
 if ! exists aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$OIDC_ARN"; then
   aws iam create-open-id-connect-provider --url https://token.actions.githubusercontent.com \
@@ -107,6 +108,7 @@ aws iam put-role-policy --role-name "$APP-github-deploy" --policy-name push-api-
       \"ecr:InitiateLayerUpload\",\"ecr:UploadLayerPart\",\"ecr:CompleteLayerUpload\",\"ecr:PutImage\"],
      \"Resource\":\"arn:aws:ecr:$AWS_REGION:$ACCOUNT_ID:repository/$ECR_REPO\"},
     {\"Effect\":\"Allow\",\"Action\":[\"lambda:UpdateFunctionCode\",\"lambda:GetFunction\",
-      \"lambda:GetFunctionConfiguration\"],\"Resource\":\"$FUNCTION_ARN\"}]}"
+      \"lambda:GetFunctionConfiguration\",\"lambda:PublishVersion\",\"lambda:InvokeFunction\",
+      \"lambda:GetAlias\",\"lambda:UpdateAlias\"],\"Resource\":[\"$FUNCTION_ARN\",\"$FUNCTION_ARN:*\"]}]}"
 
 echo "done. GitHub deploy role: arn:aws:iam::$ACCOUNT_ID:role/$APP-github-deploy"

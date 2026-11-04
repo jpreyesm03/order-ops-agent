@@ -47,7 +47,8 @@ jobs:
 
   # Builds the API image on every push and smoke-tests it (the app must import with production dependencies
   # only). On main, when API files changed, it is pushed to ECR (short-lived OIDC credentials, no stored AWS keys)
-  # and deployed to Lambda; the job fails if the new version doesn't pass /healthz. One deploy at a time.
+  # and released on Lambda: publish a version, check that version directly, then move the `live` alias (the one
+  # the public URL serves) to it. A version that fails the check never gets traffic. One deploy at a time.
   image:
     runs-on: ubuntu-latest
     needs: api
@@ -60,7 +61,7 @@ jobs:
     env:
       ECR_REPO: 054896499172.dkr.ecr.us-west-2.amazonaws.com/order-ops-api
       FUNCTION: order-ops-api
-      API_URL: https://mf33khpc3wrj4zd42xhq4srhuy0oxbgc.lambda-url.us-west-2.on.aws
+      API_URL: https://woepit4n6ywq4satuxhu35lapi0yrnmk.lambda-url.us-west-2.on.aws
     steps:
       - uses: actions/checkout@v4
         with:
@@ -110,16 +111,18 @@ jobs:
           for tag in "${{ github.sha }}" latest; do
             docker tag order-ops-api:ci "$ECR_REPO:$tag" && docker push -q "$ECR_REPO:$tag"
           done
-      - name: Deploy to Lambda
+      - name: Release on Lambda (publish, check, then switch the live alias)
         if: steps.deploy.outputs.run == 'true'
         run: |
           aws lambda update-function-code --function-name "$FUNCTION" --image-uri "$ECR_REPO:${{ github.sha }}" \
             --query '[FunctionName,LastUpdateStatus]' --output text
           aws lambda wait function-updated-v2 --function-name "$FUNCTION"
-          aws lambda get-function-configuration --function-name "$FUNCTION" \
-            --query '[LastUpdateStatus,LastUpdateStatusReason]' --output text
-          for i in 1 2 3 4 5; do   # first request is a cold start (image pull + DB connect)
-            if curl -fsS --max-time 30 "$API_URL/healthz"; then echo; exit 0; fi
-            sleep 5
-          done
-          echo "New version failed /healthz"; exit 1
+          VERSION=$(aws lambda publish-version --function-name "$FUNCTION" --description "${{ github.sha }}" \
+                    --query Version --output text)
+          PREVIOUS=$(aws lambda get-alias --function-name "$FUNCTION" --name live --query FunctionVersion --output text)
+          echo "new version $VERSION (live is on $PREVIOUS)"
+          scripts/lambda_smoke.sh "$VERSION"
+          aws lambda update-alias --function-name "$FUNCTION" --name live --function-version "$VERSION" \
+            --query '[Name,FunctionVersion]' --output text
+          curl -fsS --max-time 30 "$API_URL/healthz"; echo
+          echo "Rollback: scripts/lambda_rollback.sh $PREVIOUS"

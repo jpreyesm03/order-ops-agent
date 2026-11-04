@@ -182,9 +182,17 @@ added under it as they come in.
     public), guarded by a lock row in `public.task_locks` (Neon's transaction pooler rules out session advisory
     locks). Async retries are off so a retry can't race a half-done reseed.
   - The nightly reseed (OUTLINE 8.8) is now an EventBridge Scheduler rule (10:00 UTC) invoking the function.
-- **Trade-offs accepted:** cold start ~5 s on the first request after idle (warm ~0.13 s for `/healthz`); no
-  blue/green canary (a new version takes traffic as soon as it's updated; CI fails the job if `/healthz` fails and
-  the previous image is one `update-function-code` away). The account's concurrency limit (10) is too low to
+- **Trade-offs, and what we did about them:**
+  - Cold start ~5 s on the first request after idle (warm ~0.13 s for `/healthz`). The web app pings `/healthz` as
+    soon as any page opens, so the instance is usually warm before the visitor's first message. Provisioned
+    concurrency would remove it entirely but costs money all month, which is the thing we left ECS to avoid.
+  - Release safety. The first Lambda deploy put new code on traffic immediately. Now each release publishes a
+    numbered version, CI calls `/healthz` on *that version* directly (a Function URL-shaped event through the
+    adapter, `scripts/lambda_smoke.sh`), and only then moves the `live` alias, which the public URL serves. A
+    failing build never gets a request; rollback is `scripts/lambda_rollback.sh <version>` (~1 s, no rebuild;
+    window = the last 10 images ECR keeps). Gradual traffic shifting (CodeDeploy canary) was not added: with
+    demo-level traffic a 10% canary sees almost no requests, so the pre-traffic check is what catches a bad build.
+    The Function URL moved to the alias, so the URL changed once (CI, Vercel and the Shopify webhooks updated). The account's concurrency limit (10) is too low to
   reserve concurrency, so spend is capped by the Postgres rate limits.
 - **First deploy:** 502 on every request. Logs showed the app exiting at startup: `ssm:GetParametersByPath`
   was denied because the IAM policy named only `parameter/order-ops`; it now allows the path and everything under
