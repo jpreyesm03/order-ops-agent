@@ -70,7 +70,8 @@ aws iam attach-role-policy --role-name "$APP-lambda" \
 aws iam put-role-policy --role-name "$APP-lambda" --policy-name params-and-self-invoke --policy-document \
   "{\"Version\":\"2012-10-17\",\"Statement\":[
     {\"Effect\":\"Allow\",\"Action\":\"ssm:GetParametersByPath\",
-     \"Resource\":\"arn:aws:ssm:$AWS_REGION:$ACCOUNT_ID:parameter/$APP\"},
+     \"Resource\":[\"arn:aws:ssm:$AWS_REGION:$ACCOUNT_ID:parameter/$APP\",
+                 \"arn:aws:ssm:$AWS_REGION:$ACCOUNT_ID:parameter/$APP/*\"]},
     {\"Effect\":\"Allow\",\"Action\":\"lambda:InvokeFunction\",\"Resource\":\"$FUNCTION_ARN\"}]}"
 
 # ---------- IAM: EventBridge Scheduler (nightly reseed) may invoke the function, nothing else ----------

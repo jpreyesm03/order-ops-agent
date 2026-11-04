@@ -93,7 +93,7 @@ added under it as they come in.
   shows TypeScript/React. The browser calls FastAPI directly (CORS), with rate limits per IP and per day to protect
   the API key on a public demo.
 
-## D13. Hosting: Vercel (web) + AWS ECS Express (API, Docker) + Neon (Postgres)
+## D13. Hosting: Vercel (web) + AWS ECS Express (API, Docker) + Neon (Postgres) · superseded for the API by D20
 - **Why:** Vercel is the native home for Next.js and free. The API ships as a Docker image (multi-stage, non-root)
   to AWS. Neon gives serverless Postgres 18 at $0 for this size, same version locally and in CI.
 - **App Runner → ECS:** the plan was App Runner, but AWS no longer lets new accounts create App Runner services.
@@ -155,7 +155,37 @@ added under it as they come in.
   secret, compared in constant time) update the mirror. Each webhook id is applied once; events for changes the
   agent already made are recognized as "in sync". External changes are written to the audit log as `external`.
 
-## D19. Auth: client-credentials tokens, secrets only in Secrets Manager
+## D19. Auth: client-credentials tokens, secrets never in code or config
 - The app uses Shopify's client-credentials grant: a 24 h token, renewed automatically; no long-lived Admin token
-  exists anywhere. Client id/secret live in `.env` locally and in AWS Secrets Manager in production, injected into
-  the container as environment variables by ECS.
+  exists anywhere. Client id/secret live in `.env` locally. In production they were in Secrets Manager, injected by
+  ECS; since D20 they are SSM SecureString parameters the function reads at cold start.
+
+## D20. API moved from ECS to Lambda (same image), measured cost first
+- **Measured (Cost Explorer, Nov 1–3, before credits):** $2.92 for under 3 days, about $35–40/month. Public IPv4
+  addresses $1.18 (4 × $0.005/h, ALB + task), load balancer $1.06, Fargate task $0.58, Secrets Manager $0.10.
+  About 80% paid for the always-on front door, not the app. Credits ($116) would have run out around February,
+  while the demo still needs to be up.
+- **Options:** keep ECS (smaller, Spot) · Lambda + API Gateway · Lambda + Function URL · another host.
+- **Chosen:** Lambda with a Function URL, running the **same Docker image** through the AWS Lambda Web Adapter
+  (an extension that turns each invocation into an HTTP request to uvicorn). No code path is Lambda-only for HTTP;
+  the image still runs anywhere. Function URL over API Gateway because API Gateway caps a request at 29 s, and an
+  agent turn with several tool calls can take longer; the URL allows up to the function timeout (900 s).
+- **Cost now:** ~$0/month within the permanent free tier (1M requests, 400k GB-s). Secrets moved to SSM
+  Parameter Store (SecureString, free) instead of Secrets Manager ($0.40 per secret).
+- **What changed because Lambda runs several short-lived copies:**
+  - Rate limits were in process memory (one ECS task). They now live in Postgres (`public.rate_limits`, fixed
+    UTC-hour per IP and UTC-day windows, incremented in one transaction; a rejected message rolls back). The IP comes
+    from the request context the adapter passes; the old code trusted the first `X-Forwarded-For` entry, which the
+    client controls (found during the move; also true on ECS).
+  - The Shopify reseed ran in a background thread; Lambda freezes the process after the response. It now runs as an
+    async invocation of the same function (delivered to `POST /events`, admin token required since the URL is
+    public), guarded by a lock row in `public.task_locks` (Neon's transaction pooler rules out session advisory
+    locks). Async retries are off so a retry can't race a half-done reseed.
+  - The nightly reseed (OUTLINE 8.8) is now an EventBridge Scheduler rule (10:00 UTC) invoking the function.
+- **Trade-offs accepted:** cold start ~5 s on the first request after idle (warm ~0.13 s for `/healthz`); no
+  blue/green canary (a new version takes traffic as soon as it's updated; CI fails the job if `/healthz` fails and
+  the previous image is one `update-function-code` away). The account's concurrency limit (10) is too low to
+  reserve concurrency, so spend is capped by the Postgres rate limits.
+- **First deploy:** 502 on every request. Logs showed the app exiting at startup: `ssm:GetParametersByPath`
+  was denied because the IAM policy named only `parameter/order-ops`; it now allows the path and everything under
+  it (`parameter/order-ops/*`). ECS kept serving the site until Lambda passed its checks; the ECS script is in `scripts/archive/`.
