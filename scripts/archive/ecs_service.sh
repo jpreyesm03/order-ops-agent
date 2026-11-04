@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ARCHIVED 2026-11-04: the API moved to Lambda (scripts/lambda_service.sh, DECISIONS D20). Kept for reference.
 # Creates the API's ECS Express service (Fargate task + HTTPS load balancer), or updates it to match this file.
 # This file is the source of truth for the API's runtime config.
 #   scripts/ecs_service.sh                                  # create / update with the image tagged :latest

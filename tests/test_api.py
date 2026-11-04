@@ -1,6 +1,9 @@
 """API tests that don't call the LLM: sessions, approval inbox, decisions, views, admin auth."""
 from __future__ import annotations
 
+import json
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -62,6 +65,33 @@ def test_audit_and_stats(client):
 def test_reset_needs_token(client):
     assert client.post("/api/admin/reset").status_code == 403
     assert client.post("/api/admin/reset", headers={"x-admin-token": "wrong"}).status_code == 403
+
+
+def test_events_need_token(client, monkeypatch):
+    """/events is reachable through the public URL too, so every task must carry the admin token."""
+    assert client.post("/events", json={"task": "reseed"}).status_code == 403
+    monkeypatch.setenv("ADMIN_TOKEN", "t0ken")
+    assert client.post("/events", json={"task": "reseed", "token": "wrong"}).status_code == 403
+    assert client.post("/events", json={"task": "reseed", "token": "t0ken"}).status_code == 400  # tau2: no reseed
+
+
+def test_rate_limit_is_shared_in_postgres(client, monkeypatch):
+    """The per-IP limit is counted in Postgres (all instances see it); a rejected message doesn't count."""
+    monkeypatch.setattr(api, "TURNS_PER_IP_PER_HOUR", 2)
+    addr = f"203.0.113.{uuid.uuid4().int % 250}"
+    ctx = {"x-amzn-request-context": json.dumps({"http": {"sourceIp": addr}})}
+    sid = client.post("/api/sessions").json()["session_id"]
+
+    def post(spoof: str) -> int:  # a client-chosen X-Forwarded-For must not open a fresh window
+        headers = ctx | {"x-forwarded-for": spoof}
+        return client.post(f"/api/sessions/{sid}/messages", json={"text": ""}, headers=headers).status_code
+
+    assert [post("1.1.1.1"), post("2.2.2.2"), post("3.3.3.3"), post("4.4.4.4")] == [422, 422, 429, 429]
+    conn = db.connect()
+    bucket = f"ip:{addr}:%"
+    assert conn.execute("SELECT hits FROM public.rate_limits WHERE bucket LIKE %s", (bucket,)).fetchone()[0] == 2
+    conn.execute("DELETE FROM public.rate_limits WHERE bucket LIKE %s", (bucket,))
+    conn.close()
 
 
 def test_message_validation(client):

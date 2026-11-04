@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import subprocess
@@ -11,7 +12,6 @@ import sys
 import threading
 import time
 import uuid
-from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -22,7 +22,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from . import db
+from . import aws, db
 from .agent import Agent
 from .gate import Gate, Session
 from .shopify import MIRROR_SQL, ShopifyClient, ShopifyStore, apply_webhook, verify_webhook
@@ -53,8 +53,19 @@ def make_gate(conn) -> Gate:
     return Gate(conn, LIVE, ShopifyStore(conn, LIVE, _shopify))
 
 
+# Shared state that must hold across every API instance (Lambda runs several), so it lives in Postgres.
+# Plain tables, no session-level advisory locks: production connects through Neon's transaction pooler.
+OPS_SQL = """
+CREATE TABLE IF NOT EXISTS public.rate_limits (
+    bucket text PRIMARY KEY, hits integer NOT NULL, expires_at timestamptz NOT NULL);
+CREATE TABLE IF NOT EXISTS public.task_locks (
+    name text PRIMARY KEY, until timestamptz NOT NULL);
+"""
+
+
 def ensure_live(conn) -> None:
     """Create the base store and the live copy on first boot."""
+    conn.execute(OPS_SQL)
     have = {r[0] for r in conn.execute("SELECT schema_name FROM information_schema.schemata")}
     if BACKEND == "shopify":
         if LIVE not in have:
@@ -70,6 +81,7 @@ def ensure_live(conn) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _client
+    aws.load_ssm_params()  # Lambda: secrets from SSM; no-op elsewhere
     conn = db.connect()
     ensure_live(conn)
     conn.close()
@@ -94,26 +106,41 @@ def get_conn():
 
 
 # ---------- rate limits (protect the API key on a public demo) ----------
-_hits: dict[str, list[float]] = defaultdict(list)
-_day = {"date": time.strftime("%Y-%m-%d"), "count": 0}
-_rl_lock = threading.Lock()
+# Fixed windows (UTC hour per IP, UTC day overall) counted in Postgres, so the limits hold across instances.
+# The counters are bumped in one transaction; a rejected message rolls back and doesn't count.
+RATE_SQL = """INSERT INTO public.rate_limits AS r (bucket, hits, expires_at)
+VALUES (%(day)s, 1, now() + interval '2 days'), (%(ip)s, 1, now() + interval '2 hours')
+ON CONFLICT (bucket) DO UPDATE SET hits = r.hits + 1
+RETURNING bucket, hits"""
 
 
-def rate_limit(request: Request) -> None:
-    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0]
-    now = time.time()
-    with _rl_lock:
-        today = time.strftime("%Y-%m-%d")
-        if _day["date"] != today:
-            _day.update(date=today, count=0)
-        if _day["count"] >= TURNS_PER_DAY:
+def client_ip(request: Request) -> str:
+    """The caller's IP as the edge saw it. The first X-Forwarded-For entry is whatever the client sent, so on
+    Lambda use the request context the Web Adapter passes; behind a proxy, the entry the proxy appended (last)."""
+    ctx = request.headers.get("x-amzn-request-context")
+    if ctx:
+        try:
+            return json.loads(ctx)["http"]["sourceIp"]
+        except (ValueError, KeyError, TypeError):
+            pass
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[-1].strip()
+    return request.client.host if request.client else "?"
+
+
+def rate_limit(request: Request, conn=Depends(get_conn)) -> None:
+    ip = client_ip(request)
+    keys = {"day": "day:" + time.strftime("%Y-%m-%d", time.gmtime()),
+            "ip": f"ip:{ip}:" + time.strftime("%Y-%m-%dT%H", time.gmtime())}
+    with conn.transaction():
+        hits = dict(conn.execute(RATE_SQL, keys).fetchall())
+        if hits[keys["day"]] > TURNS_PER_DAY:
             raise HTTPException(429, "The demo reached its daily limit. Please come back tomorrow.")
-        recent = [t for t in _hits[ip] if now - t < 3600]
-        if len(recent) >= TURNS_PER_IP_PER_HOUR:
+        if hits[keys["ip"]] > TURNS_PER_IP_PER_HOUR:
             raise HTTPException(429, "Too many messages from your network this hour. Please try again later.")
-        recent.append(now)
-        _hits[ip] = recent
-        _day["count"] += 1
+    if hits[keys["ip"]] == 1:  # first message from this IP this hour: drop expired windows
+        conn.execute("DELETE FROM public.rate_limits WHERE expires_at < now()")
 
 
 # ---------- models ----------
@@ -278,27 +305,65 @@ def demo_customers(conn=Depends(get_conn)) -> list[dict]:
     return [dict(zip(keys, r, strict=True)) for r in rows]
 
 
+def _check_admin(given: str) -> None:
+    token = os.getenv("ADMIN_TOKEN")
+    if not token or not hmac.compare_digest(given.encode(), token.encode()):
+        raise HTTPException(403, "Forbidden")
+
+
 @app.post("/api/admin/reset")
 def reset(x_admin_token: str = Header(default=""), conn=Depends(get_conn)) -> dict:
-    token = os.getenv("ADMIN_TOKEN")
-    if not token or x_admin_token != token:
-        raise HTTPException(403, "Forbidden")
+    _check_admin(x_admin_token)
     if BACKEND == "shopify":  # delete the seeded Shopify orders and seed them again (takes ~1 min)
+        if aws.on_lambda():  # the process freezes after the response: reseed in its own invocation
+            aws.invoke_self_async({"task": "reseed", "token": os.environ["ADMIN_TOKEN"]})
+            return {"ok": True, "status": "reseeding"}
         if not _reseed_lock.acquire(blocking=False):
             return {"ok": True, "status": "already reseeding"}
-        threading.Thread(target=_reseed, daemon=True).start()
+
+        def run() -> None:
+            try:
+                _reseed()
+            finally:
+                _reseed_lock.release()
+
+        threading.Thread(target=run, daemon=True).start()
         return {"ok": True, "status": "reseeding"}
     with _conn_lock:
         db.clone_schema(conn, "base", LIVE)
     return {"ok": True}
 
 
-def _reseed() -> None:
+class TaskIn(BaseModel):
+    task: str
+    token: str = ""
+
+
+@app.post("/events")
+def run_task(body: TaskIn) -> dict:
+    """Non-HTTP Lambda events (async self-invocations, the nightly schedule), delivered by the Lambda Web Adapter.
+    The URL is public like every other route, so each event carries the admin token."""
+    _check_admin(body.token)
+    if body.task != "reseed" or BACKEND != "shopify":
+        raise HTTPException(400, f"Unknown task: {body.task}")
+    return {"ok": True, "status": _reseed()}
+
+
+def _reseed() -> str:
+    """Delete the seeded Shopify orders and seed them again. One at a time across all instances (lock row)."""
+    with db.connect() as conn:
+        got = conn.execute("""INSERT INTO public.task_locks (name, until) VALUES ('reseed', now() + interval '15 min')
+                              ON CONFLICT (name) DO UPDATE SET until = EXCLUDED.until
+                              WHERE task_locks.until < now() RETURNING name""").fetchone()
+    if got is None:
+        return "already reseeding"
     try:
-        subprocess.run([sys.executable, "-m", "order_ops.seed_shopify", "--reset", "--schema", LIVE,
-                        "--users", os.getenv("SHOPIFY_SEED_USERS", "8")], check=False, timeout=900)
+        done = subprocess.run([sys.executable, "-m", "order_ops.seed_shopify", "--reset", "--schema", LIVE,
+                               "--users", os.getenv("SHOPIFY_SEED_USERS", "8")], check=False, timeout=840)
+        return "reseeded" if done.returncode == 0 else f"reseed failed ({done.returncode})"
     finally:
-        _reseed_lock.release()
+        with db.connect() as conn:  # fresh connection: the seed takes a minute and pooled ones can drop
+            conn.execute("DELETE FROM public.task_locks WHERE name = 'reseed'")
 
 
 @app.post("/webhooks/shopify")

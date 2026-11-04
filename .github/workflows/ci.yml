@@ -47,7 +47,7 @@ jobs:
 
   # Builds the API image on every push and smoke-tests it (the app must import with production dependencies
   # only). On main, when API files changed, it is pushed to ECR (short-lived OIDC credentials, no stored AWS keys)
-  # and rolled out on ECS. One deploy at a time; a rollout ECS rolls back fails the job.
+  # and deployed to Lambda; the job fails if the new version doesn't pass /healthz. One deploy at a time.
   image:
     runs-on: ubuntu-latest
     needs: api
@@ -59,7 +59,8 @@ jobs:
       id-token: write
     env:
       ECR_REPO: 054896499172.dkr.ecr.us-west-2.amazonaws.com/order-ops-api
-      API_URL: https://or-9c9c3432e69a4ff6b5742b1b9aa0054c.ecs.us-west-2.on.aws
+      FUNCTION: order-ops-api
+      API_URL: https://mf33khpc3wrj4zd42xhq4srhuy0oxbgc.lambda-url.us-west-2.on.aws
     steps:
       - uses: actions/checkout@v4
         with:
@@ -87,12 +88,15 @@ jobs:
           context: .
           platforms: linux/amd64
           load: true
+          provenance: false   # Lambda takes a single-platform image manifest, not an index with attestations
+          sbom: false
           tags: order-ops-api:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Smoke test the image
         run: |
-          docker run --rm order-ops-api:ci python -c "import order_ops.api, order_ops.shopify, order_ops.seed_shopify, order_ops.mcp_server; print('imports ok')"
+          docker run --rm order-ops-api:ci python -c "import order_ops.api, order_ops.shopify, order_ops.seed_shopify, order_ops.mcp_server, boto3; print('imports ok')"
+          docker run --rm --entrypoint test order-ops-api:ci -x /opt/extensions/lambda-adapter && echo "lambda adapter ok"
       - if: steps.deploy.outputs.run == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -106,22 +110,16 @@ jobs:
           for tag in "${{ github.sha }}" latest; do
             docker tag order-ops-api:ci "$ECR_REPO:$tag" && docker push -q "$ECR_REPO:$tag"
           done
-      - name: Roll out on ECS
+      - name: Deploy to Lambda
         if: steps.deploy.outputs.run == 'true'
         run: |
-          DEP=$(aws ecs update-service --cluster order-ops --service order-ops-api --force-new-deployment \
-                --query 'service.deployments[?status==`PRIMARY`].id | [0]' --output text)
-          echo "deployment $DEP"
-          for i in $(seq 1 100); do   # up to 25 min: canary + bake time + draining
-            STATE=$(aws ecs describe-services --cluster order-ops --services order-ops-api \
-                    --query "services[0].deployments[?id=='$DEP'].rolloutState | [0]" --output text)
-            echo "$(date +%H:%M:%S) $STATE"
-            case "$STATE" in
-              COMPLETED) curl -fsS "$API_URL/healthz"; echo; exit 0 ;;
-              FAILED|None) echo "Rollout failed or was rolled back. Recent events:"
-                           aws ecs describe-services --cluster order-ops --services order-ops-api \
-                             --query 'services[0].events[:8].message' --output text; exit 1 ;;
-            esac
-            sleep 15
+          aws lambda update-function-code --function-name "$FUNCTION" --image-uri "$ECR_REPO:${{ github.sha }}" \
+            --query '[FunctionName,LastUpdateStatus]' --output text
+          aws lambda wait function-updated-v2 --function-name "$FUNCTION"
+          aws lambda get-function-configuration --function-name "$FUNCTION" \
+            --query '[LastUpdateStatus,LastUpdateStatusReason]' --output text
+          for i in 1 2 3 4 5; do   # first request is a cold start (image pull + DB connect)
+            if curl -fsS --max-time 30 "$API_URL/healthz"; then echo; exit 0; fi
+            sleep 5
           done
-          echo "Rollout still in progress after 25 min"; exit 1
+          echo "New version failed /healthz"; exit 1
