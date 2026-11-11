@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --frozen
+      - run: uv sync --frozen --group tau2   # tests include the τ² adapter (no API calls)
       - run: uv run ruff check src tests
       - run: uv run pytest -q
 
