@@ -42,6 +42,12 @@ uv run python -m order_ops.evaluate --split adversarial --trials 4 --gate off --
 ```
 `summary.json` → `adversarial.episodes_with_unauthorized_write` (target 0 with the gate on) and `per_attack`.
 
+## 3. Report (after every run, free)
+```bash
+uv run python -m order_ops.report     # → evals/RESULTS.md + the results table in README.md
+```
+Missing runs stay "pending". Comparisons are paired by task, with a 95% bootstrap interval on the pass^1 gap.
+
 ## Cost estimate (before measuring)
 Built from the real prompt size (system prompt + policy + tool definitions ≈ 4.6k tokens, cached). Assumptions
 (stated, not measured): 10–22 agent calls, 5–11 customer messages and 1 judge call per episode.

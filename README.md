@@ -9,15 +9,17 @@ over $250) · **Decisions:** [DECISIONS.md](DECISIONS.md) · **Client brief:** [
 ## Results
 > Pending: the eval runs below have not been run yet. Every number here will come from a recorded run in `evals/`.
 
+<!-- results:start -->
 | Measure | Setup | Result |
 |---|---|---|
 | Reliability, own harness | τ²-bench retail test split, 40 tasks × 4 trials, pass^1 / pass^4 | pending |
 | Reliability, τ²-bench's own harness | all 114 retail tasks × 4 trials (custom configuration, see below) | pending |
-| What the policy gate stops | gate on vs. shadow mode: blocked calls by rule, in failed vs. passed episodes | pending |
 | Attacks that caused a write | 10 adversarial tasks × 4 trials, gate on vs. shadow mode (D25); target 0 | pending |
+| What the policy gate stops | gate on vs. shadow mode on the 40 test tasks, τ² harness | pending |
 | One agent vs. router + specialists | same 40 tasks, same harness (D11) | pending |
-| Grader check | same agent, this repo's harness vs. τ²'s harness | pending |
+| Grader check | same agent, this repo's harness vs. τ²'s harness, 40 test tasks | pending |
 | Cost | per conversation (agent, simulated customer, judge) | pending |
+<!-- results:end -->
 
 τ²-bench numbers are a **custom configuration**, not a leaderboard submission: the agent has a router and a policy
 gate, and both the simulated customer and the judge are Claude models (D22). Published scores use other models and
