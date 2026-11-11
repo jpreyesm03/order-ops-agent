@@ -9,6 +9,10 @@ Every tool call from the model goes through `Gate.run`:
   6. approval      money movements above the threshold wait for a human (live) or are counted (eval)
   7. idempotency   the same write with the same arguments in the same session runs once
   8. audit         every call is logged with its outcome
+
+With `enforce=False` (shadow mode, for measuring the gate) rules 2-6 only count what they would have blocked
+(`stats["would_block"]`) and the call runs as the model asked. Idempotency stays on: it protects the data, and a
+repeated write is reported as `duplicates` either way.
 """
 from __future__ import annotations
 
@@ -89,8 +93,9 @@ class Blocked(Exception):
 
 
 class Gate:
-    def __init__(self, conn: psycopg.Connection, schema: str, store: Store | None = None):
+    def __init__(self, conn: psycopg.Connection, schema: str, store: Store | None = None, enforce: bool = True):
         self.conn = conn
+        self.enforce = enforce
         self.s = db.ident(schema)
         self.store = store or Store(conn, schema)  # ShopifyStore for the live Shopify demo
 
@@ -108,12 +113,22 @@ class Gate:
         try:
             if tool not in READ_TOOLS | WRITE_TOOLS:
                 raise ToolError(f"Unknown tool {tool}")
-            self._check(session, tool, args)
+            try:
+                self._check(session, tool, args)
+            except Blocked as b:
+                if self.enforce:
+                    raise
+                self._shadow(session, tool, tier, args, b.rule)
             if tool in WRITE_TOOLS:
                 return self._write(session, tool, args)
             result = call(self.store, tool, args)
             if tool in AUTH_TOOLS:
-                self._authenticate(session, result)
+                try:
+                    self._authenticate(session, result)
+                except Blocked as b:
+                    if self.enforce:
+                        raise
+                    self._shadow(session, tool, tier, args, b.rule)  # stays the first customer, as if enforced
             self._audit(session, tool, tier, args, "ok")
             return {"ok": True, "result": result}
         except Blocked as b:
@@ -182,6 +197,12 @@ class Gate:
                                 (item_id,)).fetchone()
         return None if row is None else row[0]
 
+    def _shadow(self, session: Session, tool: str, tier: str, args: dict, rule: str) -> None:
+        """Shadow mode: count the call the gate would have stopped, then let it run."""
+        would = session.stats.setdefault("would_block", {})
+        would[rule] = would.get(rule, 0) + 1
+        self._audit(session, tool, tier, args, "would_block", rule)
+
     # ---------- checks ----------
     def _check(self, session: Session, tool: str, args: dict[str, Any]) -> None:
         if tool in NEEDS_AUTH and session.user_id is None:
@@ -239,7 +260,9 @@ class Gate:
                                                            "done again.", "result": prior[0]}
         amount = self.amount_at_stake(tool, args)
         trace.get_current_span().set_attribute("order_ops.amount_usd", float(amount))
-        if amount > Decimal(str(session.approval_threshold)):
+        if amount > Decimal(str(session.approval_threshold)) and not self.enforce:
+            self._shadow(session, tool, "write", args, "approval")
+        elif amount > Decimal(str(session.approval_threshold)):
             session.stats["approvals"] += 1
             if not session.auto_approve:
                 session.confirmation = False

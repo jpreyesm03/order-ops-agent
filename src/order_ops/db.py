@@ -132,7 +132,8 @@ CREATE TABLE {s}.audit_log (
     tool        TEXT NOT NULL,
     tier        TEXT NOT NULL,
     args        JSONB NOT NULL,
-    outcome     TEXT NOT NULL CHECK (outcome IN ('ok', 'error', 'blocked', 'pending_approval', 'duplicate')),
+    outcome     TEXT NOT NULL CHECK (outcome IN ('ok', 'error', 'blocked', 'would_block', 'pending_approval',
+                                                  'duplicate')),
     detail      TEXT
 );
 CREATE TABLE {s}.sessions (

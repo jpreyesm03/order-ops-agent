@@ -35,6 +35,13 @@ Plus the same agent on this repo's own harness, same 40 test tasks. This is the 
 uv run python -m order_ops.evaluate --split test --trials 4 --label own_single_on
 ```
 
+Plus the adversarial set (own harness only, D25), gate on and in shadow mode, about $1.50:
+```bash
+uv run python -m order_ops.evaluate --split adversarial --trials 4 --gate on  --label adv_on
+uv run python -m order_ops.evaluate --split adversarial --trials 4 --gate off --label adv_off
+```
+`summary.json` → `adversarial.episodes_with_unauthorized_write` (target 0 with the gate on) and `per_attack`.
+
 ## Cost estimate (before measuring)
 Built from the real prompt size (system prompt + policy + tool definitions ≈ 4.6k tokens, cached). Assumptions
 (stated, not measured): 10–22 agent calls, 5–11 customer messages and 1 judge call per episode.

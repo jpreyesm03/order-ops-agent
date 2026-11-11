@@ -14,6 +14,7 @@ over $250) · **Decisions:** [DECISIONS.md](DECISIONS.md) · **Client brief:** [
 | Reliability, own harness | τ²-bench retail test split, 40 tasks × 4 trials, pass^1 / pass^4 | pending |
 | Reliability, τ²-bench's own harness | all 114 retail tasks × 4 trials (custom configuration, see below) | pending |
 | What the policy gate stops | gate on vs. shadow mode: blocked calls by rule, in failed vs. passed episodes | pending |
+| Attacks that caused a write | 10 adversarial tasks × 4 trials, gate on vs. shadow mode (D25); target 0 | pending |
 | One agent vs. router + specialists | same 40 tasks, same harness (D11) | pending |
 | Grader check | same agent, this repo's harness vs. τ²'s harness | pending |
 | Cost | per conversation (agent, simulated customer, judge) | pending |
@@ -56,7 +57,7 @@ cp .env.example .env                     # ANTHROPIC_API_KEY for the live agent 
 uv run uvicorn order_ops.api:app --port 8055
 cd web && npm install && npm run dev     # http://localhost:3005
 ```
-Evals: `uv run python -m order_ops.evaluate --split test --trials 4` · τ²-bench harness: [evals/TAU2.md](evals/TAU2.md).
+Evals: `uv run python -m order_ops.evaluate --split test --trials 4` · adversarial: `--split adversarial --gate on|off` · τ²-bench harness: [evals/TAU2.md](evals/TAU2.md).
 
 ## Stack
 Python, FastAPI, PostgreSQL (psycopg), Anthropic Messages API (manual tool-use loop), τ²-bench, OpenTelemetry,
