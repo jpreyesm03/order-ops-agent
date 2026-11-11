@@ -200,3 +200,83 @@ added under it as they come in.
 - **Cutover:** the web app was switched to the alias URL and the live bundle checked (alias URL present, ECS URL
   gone); then the ECS service, its load balancer, the cluster, the ECS IAM roles and the Secrets Manager secrets
   were deleted. Checked after: no load balancers, target groups or public IPs left in the account.
+
+## D21. Run the agent on τ²-bench's own harness, pinned through the lockfile
+- **Constraint:** every eval number so far comes from this repo's simulator and judge (D1: data only). An outside
+  reader can fairly ask whether the grader favours the agent. The fix is to run the same agent inside τ²-bench's
+  own orchestrator, user simulator and evaluator.
+- **Evidence:** τ²-bench `v2.0.0` (commit `989d328`, the same commit the data in `data/tau2/` comes from) depends
+  on litellm and caps it at `<1.82.7`. Versions 1.82.7 and 1.82.8 on PyPI were a credential stealer (March 2026).
+  An unlocked install resolves whatever is newest that day.
+- **Options:** optional dependency group pinned to the git commit and recorded in `uv.lock` · ad-hoc
+  `uv run --with` (nothing locked) · copy the source into the repo.
+- **Chosen:** dependency group `tau2` in `pyproject.toml`, git source pinned to `989d328`, every transitive version
+  in `uv.lock`. Installed only with `uv sync --group tau2`. The Lambda image installs `--no-dev --extra aws`, so
+  production never contains it.
+- **Rejected:** `--with` (a benchmark run nobody can reproduce is not evidence); vendoring (thousands of lines that
+  are not mine, read as if they were).
+- **Would change if:** τ²'s dependencies conflict with the app's. Then a separate `evals/tau2/` project with its
+  own lockfile.
+
+## D22. τ² runs use Claude as the simulated customer and judge, reported as a custom setup
+- **Constraint:** the spec asked for a score "next to published scores for the same model".
+- **Evidence (leaderboard files at `v2.0.0`, checked 2026-11-11):**
+  - No Haiku model has a τ² retail entry at all. The 2.0 text tab has no retail entries yet (voice only).
+  - On the 1.x tab, Sierra's recent runs use a gpt-5.2 customer. Retail: Sonnet 4.5 pass^1 72.4 / pass^4 39.5,
+    Opus 4.5 79.6 / 51.8. Older vendor runs used gpt-4.1.
+  - τ²'s submission rules call any router, extra agent, modified prompt or non-default simulator "custom". The
+    routed agent (D11) and the policy gate both qualify, whatever the customer model.
+  - The customer model alone moves scores by up to 9 points with the agent held fixed ("Lost in Simulation",
+    arXiv 2601.17087, ACL 2026).
+  - v2.0's natural-language judge defaults to an OpenAI model (`gpt-5.4-mini`).
+- **Options:** gpt-4.1 customer (the old default) · Claude customer · both.
+- **Chosen:** Claude for the customer and the judge (one provider, one key, one spend cap). Results are labelled
+  "custom configuration, not a leaderboard submission". Published numbers appear only as context, never as a
+  ranking.
+- **Instead of leaderboard comparability, two comparisons that answer real questions:**
+  1. Same agent, this repo's harness vs τ²'s harness: how much does the home-made grader move the score?
+  2. Gate on vs off (D23) and single vs routed (D11) on the same harness and customer.
+- **Would change if:** a reader needs a leaderboard-comparable number. Then: a standard run
+  (default agent scaffold + default customer) for one model, at the cost measured by the sample run.
+- **Correction to D1:** "published baselines to compare against" holds for other models, not for the model this
+  agent uses.
+
+## D23. The policy gate inside τ²: same rules, lookups behind methods
+- **Constraint:** τ² executes tools against its own in-memory database. The gate (D5) looked up order owners,
+  payment-method owners, order totals and variant prices with SQL against Postgres.
+- **Options:** move the lookups into methods and add a subclass that reads τ²'s database · run every tool on both
+  Postgres and τ² (two stores that can drift; every call runs twice) · re-implement the rules in the adapter (two
+  copies of the policy).
+- **Chosen:** lookups and bookkeeping (idempotency keys, audit, approvals) are methods on `Gate`. `Tau2Gate`
+  overrides them to read τ²'s database and keep its records in memory. The rule code (`_check`, approval threshold,
+  one-yes-per-write, idempotency) is the same code in both. A blocked call goes back to the model as a tool
+  result and never reaches τ²'s environment. The same split lets a future gateway wrap this agent's
+  tools.
+- **Gate off runs in shadow mode:** the gate still evaluates every call and records what it *would* have blocked,
+  without blocking. One gate-off run then gives the counterfactual ("would have blocked N writes; M of them in
+  failed tasks") without paying for extra runs.
+- **Expected result, said before measuring:** standard τ² customers rarely attack, so on/off may differ by about
+  0 points on the standard tasks. The gate's value shows on the adversarial tasks.
+
+## D24. Tracing: OpenTelemetry to Phoenix locally and AWS X-Ray on Lambda
+- **Constraint:** the spec (§P.2) asks for: a trace per conversation with model calls, tool calls,
+  gate decisions and approvals, and no customer text in spans. Same module design as the other projects (an
+  OpenTelemetry `span()` helper, OpenInference span kinds, off unless an endpoint is configured).
+- **Options:** Phoenix locally + X-Ray on Lambda · Phoenix only, live later · a hosted LLM-tracing service.
+- **Chosen:** Phoenix locally (`ORDER_OPS_TRACE_ENDPOINT`), X-Ray on Lambda (`ORDER_OPS_TRACE_XRAY=1`). The app
+  already runs on AWS; X-Ray adds no account, key or vendor. A hosted service would add a new account and a stack
+  different from the other projects.
+- **Details that matter:**
+  - X-Ray's OTLP endpoint (`https://xray.<region>.amazonaws.com/v1/traces`) accepts HTTP only, needs SigV4-signed
+    requests and needs CloudWatch Transaction Search enabled. The exporter signs with the function's own role
+    (`xray:PutTraceSegments`, `xray:PutSpans`).
+  - Lambda freezes the process after each response, so spans waiting in a batch would be lost. The API flushes at
+    the end of each request.
+  - One trace per conversation even though each message is a separate HTTP request (and maybe a different Lambda
+    instance): the session stores the trace id and root span id, and every turn is a child of that root.
+  - The supervisor console links each ticket to its trace. The link is a URL template, so it works with any
+    backend. X-Ray trace ids are the OpenTelemetry id reformatted as `1-<first 8 hex>-<last 24 hex>`.
+  - Spans carry ids, tool names, outcomes, gate rule, amounts, tokens, cost and timing. No customer or agent
+    text, no tool arguments that hold personal data (emails, names, addresses).
+    `ORDER_OPS_TRACE_CONTENT=1` adds text for local debugging only.
+- **Cost:** spans land in CloudWatch Logs (`aws/spans`), billed per GB ingested. At demo volume, about $0.
