@@ -19,9 +19,16 @@ exists() { "$@" >/dev/null 2>&1; }
 
 # Non-secret config. Secrets are read from SSM (SSM_PARAMETER_PATH) at cold start, so they never sit in the
 # function's configuration.
-python3 - "$CORS_ORIGINS" > "$TMP/env.json" <<'EOF'
+# TRACING=1: OpenTelemetry spans to X-Ray (D24; one-time setup: scripts/aws_tracing.sh). The console links each
+# approval to its trace through ORDER_OPS_TRACE_URL.
+TRACING="${TRACING:-$(aws lambda get-function-configuration --function-name "$APP-api" \
+  --query 'Environment.Variables.ORDER_OPS_TRACE_XRAY' --output text 2>/dev/null | grep -x 1 || echo 0)}"
+python3 - "$CORS_ORIGINS" "$TRACING" "$AWS_REGION" > "$TMP/env.json" <<'EOF'
 import json, sys
-print(json.dumps({"Variables": {
+tracing = {"ORDER_OPS_TRACE_XRAY": "1", "ORDER_OPS_TRACE_URL":
+           f"https://{sys.argv[3]}.console.aws.amazon.com/cloudwatch/home?region={sys.argv[3]}#xray:traces/{{xray_id}}"} \
+    if sys.argv[2] == "1" else {}
+print(json.dumps({"Variables": tracing | {
     "CORS_ORIGINS": sys.argv[1], "APPROVAL_THRESHOLD_USD": "250", "AGENT_MODEL": "claude-haiku-5-5",
     "AGENT_EFFORT": "medium", "MAX_TURNS_PER_SESSION": "40", "TURNS_PER_IP_PER_HOUR": "60", "TURNS_PER_DAY": "1500",
     "STORE_BACKEND": "shopify", "SHOPIFY_STORE": "order-ops-demo.myshopify.com", "SHOPIFY_SEED_USERS": "8",
