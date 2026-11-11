@@ -20,6 +20,9 @@ export type Approval = {
   decision_note: string | null;
   created_at: string;
   decided_at: string | null;
+  session_id: string | null;
+  trace_id: string | null;
+  trace_url: string | null;
 };
 
 export type ChatReply = {

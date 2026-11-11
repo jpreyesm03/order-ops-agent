@@ -24,8 +24,8 @@ from typing import Any
 
 import anthropic
 
-from . import db
-from .agent import Agent, Usage
+from . import db, tracing
+from .agent import Agent, Usage, finish_turn, traced_turn
 from .gate import Gate, Session
 from .router import RoutedAgent
 from .simulator import TRANSFER, UserSimulator, scenario_text
@@ -41,6 +41,12 @@ _gold_lock = threading.Lock()
 
 def load_tasks(split: str) -> list[dict]:
     tasks = json.loads((db.TAU2_DIR / "tasks.json").read_text())
+    # τ² 2.0's standard English run uses reviewed customer scenarios for 50 tasks (same grading criteria); use the
+    # same wording here so this harness and τ²'s own harness see identical customers' instructions (D22).
+    reviewed = db.TAU2_DIR / "multilingual" / "en" / "retail_tasks_en.json"
+    if reviewed.exists():
+        scenarios = {t["id"]: t["user_scenario"] for t in json.loads(reviewed.read_text())}
+        tasks = [t | {"user_scenario": scenarios.get(t["id"], t["user_scenario"])} for t in tasks]
     if split == "all":
         return tasks
     ids = set(json.loads((db.TAU2_DIR / "split_tasks.json").read_text())[split])
@@ -118,13 +124,19 @@ def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: 
         transcript = [f"assistant: {GREETING}"]
         tool_calls: list[dict] = []
         agent_text, end = GREETING, None
-        for _ in range(MAX_TURNS):
+        trace_ids = tracing.start_conversation(session.session_id, **{"order_ops.channel": "eval",
+                                                                      "order_ops.task_id": task["id"],
+                                                                      "order_ops.arch": arch})
+        for turn_no in range(1, MAX_TURNS + 1):
             customer = sim.reply(agent_text)
             end = sim.ended(customer)
             if end:
                 break
             transcript.append(f"user: {customer}")
-            turn = agent.respond(session, messages, customer)
+            spent = agent.cost() if arch == "routed" else agent.usage.cost(agent.model)
+            with tracing.in_conversation(trace_ids), traced_turn(turn_no, arch, customer) as sp:
+                turn = agent.respond(session, messages, customer)
+                finish_turn(sp, turn, (agent.cost() if arch == "routed" else agent.usage.cost(agent.model)) - spent)
             tool_calls += turn.tool_calls
             agent_text = turn.reply
             transcript.append(f"assistant: {agent_text}")
@@ -155,7 +167,7 @@ def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: 
             "agent_cost_usd": round(agent_cost, 5), "cost_usd": round(cost, 5), "arch": arch,
             "routes": getattr(agent, "routes", None), "handoffs": getattr(agent, "handoffs", 0),
             "agent_latency_ms_per_call": round(agent.usage.latency_ms / max(agent.usage.calls, 1)),
-            "wall_s": round(time.perf_counter() - started, 1),
+            "wall_s": round(time.perf_counter() - started, 1), "trace_id": (trace_ids or {}).get("trace_id"),
         }
     except Exception as e:  # noqa: BLE001 - one broken episode must not kill the run
         return {"task_id": task["id"], "trial": trial, "reward": 0.0, "error": f"{type(e).__name__}: {e}",
@@ -221,6 +233,7 @@ def main() -> None:
 
     out_dir = RUNS_DIR / args.label
     out_dir.mkdir(parents=True, exist_ok=True)
+    tracing.setup()
     client = anthropic.Anthropic(max_retries=8)
     jobs = [(t, i) for t in tasks for i in range(args.trials)]
     random.Random(0).shuffle(jobs)
@@ -242,6 +255,7 @@ def main() -> None:
         "agent_effort": os.getenv("AGENT_EFFORT", "medium"), "approval_threshold": args.threshold,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    tracing.flush(10000)
     print(json.dumps(summary, indent=2))
 
 

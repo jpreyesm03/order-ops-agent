@@ -4,13 +4,15 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
 import anthropic
 from dotenv import load_dotenv
 
-from . import db
+from . import db, tracing
 from .gate import Gate, Session
 from .tool_specs import TOOLS
 
@@ -76,6 +78,37 @@ class Usage:
             setattr(self, k, getattr(self, k) + getattr(other, k))
 
 
+def record_llm(sp: Any, model: str, u: Any, latency_ms: int, stop_reason: str | None) -> None:
+    """Tokens, cost and timing of one model call on its span."""
+    one = Usage()
+    one.add(model, u, latency_ms)
+    tracing.set_attrs(sp, **{"gen_ai.usage.input_tokens": one.input, "gen_ai.usage.output_tokens": one.output,
+                             "gen_ai.usage.cache_read_input_tokens": one.cache_read,
+                             "gen_ai.usage.cache_creation_input_tokens": one.cache_write,
+                             "gen_ai.response.finish_reasons": [stop_reason] if stop_reason else None,
+                             "order_ops.cost_usd": round(one.cost(model), 6), "order_ops.latency_ms": latency_ms})
+
+
+@contextmanager
+def traced_turn(turn_no: int, arch: str, customer_text: str) -> Iterator[Any]:
+    """The span around one customer message. Holds counts, never the text (unless content tracing is on)."""
+    with tracing.span("turn", "AGENT", **{"order_ops.turn": turn_no, "order_ops.arch": arch,
+                                          "order_ops.customer_chars": len(customer_text)}) as sp:
+        if tracing.content_allowed():
+            sp.set_attribute("input.value", customer_text)
+        yield sp
+
+
+def finish_turn(sp: Any, turn: Turn, cost_usd: float) -> None:
+    blocked = [c["result"].get("blocked_by_policy") for c in turn.tool_calls if c["result"].get("blocked_by_policy")]
+    tracing.set_attrs(sp, **{"order_ops.tool_calls": len(turn.tool_calls), "order_ops.blocked": len(blocked),
+                             "order_ops.blocked_rules": sorted(set(blocked)) or None,
+                             "order_ops.transferred": turn.transferred,
+                             "order_ops.turn_cost_usd": round(cost_usd, 6)})
+    if tracing.content_allowed():
+        sp.set_attribute("output.value", turn.reply)
+
+
 @dataclass
 class Turn:
     reply: str
@@ -86,8 +119,9 @@ class Turn:
 class Agent:
     def __init__(self, gate: Gate, model: str | None = None, effort: str | None = None,
                  tools: list[dict] | None = None, system: str | None = None,
-                 client: anthropic.Anthropic | None = None):
+                 client: anthropic.Anthropic | None = None, name: str = "agent"):
         self.gate = gate
+        self.name = name  # "agent", or the specialist's name in the routed architecture
         self.model = model or os.getenv("AGENT_MODEL", "claude-haiku-5-5")
         self.effort = effort or os.getenv("AGENT_EFFORT", "medium")
         self.tools = tools or TOOLS
@@ -96,19 +130,25 @@ class Agent:
         self.usage = Usage()
 
     def _create(self, messages: list[dict]) -> Any:
-        started = time.perf_counter()
-        resp = self.client.messages.create(
-            model=self.model,
-            max_tokens=8000,
-            system=[{"type": "text", "text": self.system}],
-            tools=self.tools,
-            tool_choice={"type": "auto", "disable_parallel_tool_use": True},
-            output_config={"effort": self.effort},
-            cache_control={"type": "ephemeral"},  # caches tools + system + conversation so far
-            messages=messages,
-        )
-        self.usage.add(self.model, resp.usage, round((time.perf_counter() - started) * 1000))
-        return resp
+        with tracing.span("llm", "LLM", **{"gen_ai.system": "anthropic", "gen_ai.operation.name": "chat",
+                                           "gen_ai.request.model": self.model, "order_ops.agent": self.name,
+                                           "order_ops.effort": self.effort,
+                                           "order_ops.history_messages": len(messages)}) as sp:
+            started = time.perf_counter()
+            resp = self.client.messages.create(
+                model=self.model,
+                max_tokens=8000,
+                system=[{"type": "text", "text": self.system}],
+                tools=self.tools,
+                tool_choice={"type": "auto", "disable_parallel_tool_use": True},
+                output_config={"effort": self.effort},
+                cache_control={"type": "ephemeral"},  # caches tools + system + conversation so far
+                messages=messages,
+            )
+            latency_ms = round((time.perf_counter() - started) * 1000)
+            self.usage.add(self.model, resp.usage, latency_ms)
+            record_llm(sp, self.model, resp.usage, latency_ms, resp.stop_reason)
+            return resp
 
     def respond(self, session: Session, messages: list[dict], customer_text: str,
                 notices: list[str] | None = None, gate_text: str | None = None,

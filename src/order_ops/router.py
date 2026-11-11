@@ -17,8 +17,8 @@ import time
 
 import anthropic
 
-from . import db
-from .agent import PREAMBLE, Agent, Turn, Usage
+from . import db, tracing
+from .agent import PREAMBLE, Agent, Turn, Usage, record_llm
 from .gate import Gate, Session
 from .tool_specs import TOOLS_BY_NAME
 
@@ -68,8 +68,8 @@ def split_policy(text: str) -> tuple[str, dict[str, str]]:
     return "".join(common), sections
 
 
-def specialist_prompt(name: str) -> str:
-    common, sections = split_policy((db.TAU2_DIR / "policy.md").read_text())
+def specialist_prompt(name: str, policy: str | None = None) -> str:
+    common, sections = split_policy(policy or (db.TAU2_DIR / "policy.md").read_text())
     spec = SPECIALISTS[name]
     others = "\n".join(f"- {k}: {v['about']}" for k, v in SPECIALISTS.items() if k != name)
     body = "\n\n".join(sections[s] for s in spec["sections"])
@@ -84,6 +84,29 @@ Stay with the current specialist unless the customer's new message is clearly ab
 Authentication and greetings go to the current specialist (or 'orders' at the start)."""
 
 
+def route(client: anthropic.Anthropic, model: str, current: str, transcript: list[str], text: str,
+          usage: Usage) -> str:
+    """One cheap structured-output call: which specialist takes the customer's new message."""
+    recent = "\n".join(transcript[-6:])
+    with tracing.span("router", "LLM", **{"gen_ai.system": "anthropic", "gen_ai.request.model": model,
+                                          "order_ops.router.current": current}) as sp:
+        started = time.perf_counter()
+        resp = client.messages.create(
+            model=model, max_tokens=1000, system=ROUTER_SYSTEM,
+            messages=[{"role": "user", "content": f"Current specialist: {current}\n\nRecent conversation:\n"
+                                                  f"{recent or '(start)'}\n\nNew customer message:\n{text}"}],
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": {
+                "type": "object", "additionalProperties": False, "required": ["specialist"],
+                "properties": {"specialist": {"type": "string", "enum": list(SPECIALISTS)}}}}},
+        )
+        latency_ms = round((time.perf_counter() - started) * 1000)
+        usage.add(model, resp.usage, latency_ms)
+        record_llm(sp, model, resp.usage, latency_ms, resp.stop_reason)
+        choice = json.loads(next(b.text for b in resp.content if b.type == "text"))["specialist"]
+        sp.set_attribute("order_ops.router.choice", choice)
+        return choice
+
+
 class RoutedAgent:
     def __init__(self, gate: Gate, client: anthropic.Anthropic | None = None, model: str | None = None,
                  router_model: str | None = None):
@@ -92,7 +115,7 @@ class RoutedAgent:
         self.model = model or os.getenv("AGENT_MODEL", "claude-haiku-5-5")
         self.router_model = router_model or os.getenv("ROUTER_MODEL", "claude-haiku-5-5")
         self.agents = {
-            name: Agent(gate, model=self.model, client=self.client, system=specialist_prompt(name),
+            name: Agent(gate, model=self.model, client=self.client, system=specialist_prompt(name), name=name,
                         tools=[TOOLS_BY_NAME[t] for t in READS + spec["writes"]] + [HANDOFF_TOOL])
             for name, spec in SPECIALISTS.items()
         }
@@ -116,18 +139,7 @@ class RoutedAgent:
         return self.router_usage.cost(self.router_model) + sum(a.usage.cost(a.model) for a in self.agents.values())
 
     def _route(self, text: str) -> str:
-        recent = "\n".join(self.transcript[-6:])
-        started = time.perf_counter()
-        resp = self.client.messages.create(
-            model=self.router_model, max_tokens=1000, system=ROUTER_SYSTEM,
-            messages=[{"role": "user", "content": f"Current specialist: {self.current}\n\nRecent conversation:\n"
-                                                  f"{recent or '(start)'}\n\nNew customer message:\n{text}"}],
-            output_config={"effort": "low", "format": {"type": "json_schema", "schema": {
-                "type": "object", "additionalProperties": False, "required": ["specialist"],
-                "properties": {"specialist": {"type": "string", "enum": list(SPECIALISTS)}}}}},
-        )
-        self.router_usage.add(self.router_model, resp.usage, round((time.perf_counter() - started) * 1000))
-        return json.loads(next(b.text for b in resp.content if b.type == "text"))["specialist"]
+        return route(self.client, self.router_model, self.current, self.transcript, text, self.router_usage)
 
     def _recap(self, name: str) -> str:
         missed = self.transcript[self.seen[name]:-1]  # everything except the new customer line

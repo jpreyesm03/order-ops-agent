@@ -21,9 +21,10 @@ from decimal import Decimal
 from typing import Any
 
 import psycopg
+from opentelemetry import trace
 from psycopg.types.json import Jsonb
 
-from . import db
+from . import db, tracing
 from .store import READ_TOOLS, WRITE_TOOLS, Store, ToolError, call
 
 AUTH_TOOLS = {"find_user_id_by_email", "find_user_id_by_name_zip"}
@@ -63,6 +64,24 @@ class Session:
         return cls(**d)
 
 
+def outcome(out: dict[str, Any]) -> str:
+    if out.get("blocked_by_policy"):
+        return "blocked"
+    if out.get("pending_approval"):
+        return "pending_approval"
+    if out.get("duplicate"):
+        return "duplicate"
+    return "ok" if out.get("ok") else "error"
+
+
+def record_outcome(sp: Any, out: dict[str, Any]) -> None:
+    """The gate's decision on the tool span: outcome, and the rule and reason when it blocked."""
+    tracing.set_attrs(sp, **{"order_ops.outcome": outcome(out), "order_ops.gate.rule": out.get("blocked_by_policy"),
+                             "order_ops.approval_id": out.get("approval_id")})
+    if out.get("blocked_by_policy"):
+        sp.add_event("gate.blocked", {"rule": out["blocked_by_policy"], "reason": out.get("error", "")})
+
+
 class Blocked(Exception):
     def __init__(self, rule: str, message: str):
         super().__init__(message)
@@ -79,6 +98,13 @@ class Gate:
     def run(self, session: Session, tool: str, args: dict[str, Any]) -> dict[str, Any]:
         """Execute one model tool call under the policy. Always returns a JSON-able dict for the model."""
         tier = "write" if tool in WRITE_TOOLS else "read"
+        with tracing.span("tool", "TOOL", **{"tool.name": tool, "order_ops.tier": tier,
+                                             "order_ops.order_id": args.get("order_id")}) as sp:
+            out = self._run(session, tool, args, tier)
+            record_outcome(sp, out)
+            return out
+
+    def _run(self, session: Session, tool: str, args: dict[str, Any], tier: str) -> dict[str, Any]:
         try:
             if tool not in READ_TOOLS | WRITE_TOOLS:
                 raise ToolError(f"Unknown tool {tool}")
@@ -105,6 +131,13 @@ class Gate:
 
     def decide(self, approval_id: str, approve: bool, reviewer: str, note: str = "") -> dict[str, Any]:
         """A human approves or rejects a pending money movement (live app)."""
+        with tracing.span("approval.decision", "CHAIN", **{"order_ops.approval_id": approval_id,
+                                                           "order_ops.approved": approve}) as sp:
+            out = self._decide(approval_id, approve, reviewer, note)
+            sp.set_attribute("order_ops.approval.status", out["status"])
+            return out
+
+    def _decide(self, approval_id: str, approve: bool, reviewer: str, note: str) -> dict[str, Any]:
         row = self.conn.execute(
             f"SELECT session_id, tool, args, status FROM {self.s}.approvals WHERE approval_id = %s", (approval_id,)
         ).fetchone()
@@ -130,6 +163,25 @@ class Gate:
                         f"approval {approval_id} {status} by {reviewer}")
         return {"status": status, "result": payload}
 
+    # ---------- lookups (the only data the rules read; Tau2Gate answers them from τ²'s own database) ----------
+    def _order_owner(self, order_id: str) -> str | None:
+        row = self.conn.execute(f"SELECT user_id FROM {self.s}.orders WHERE order_id = %s", (order_id,)).fetchone()
+        return None if row is None else row[0]
+
+    def _owns_payment_method(self, user_id: str | None, payment_method_id: str) -> bool:
+        return self.conn.execute(
+            f"SELECT 1 FROM {self.s}.payment_methods WHERE user_id = %s AND payment_method_id = %s",
+            (user_id, payment_method_id)).fetchone() is not None
+
+    def _order(self, order_id: str) -> dict:
+        """The order as the tools return it (items with prices, payment_history)."""
+        return self.store._order(order_id)
+
+    def _variant_price(self, item_id: str) -> Decimal | None:
+        row = self.conn.execute(f"SELECT price FROM {self.s}.variants WHERE item_id = %s LIMIT 1",
+                                (item_id,)).fetchone()
+        return None if row is None else row[0]
+
     # ---------- checks ----------
     def _check(self, session: Session, tool: str, args: dict[str, Any]) -> None:
         if tool in NEEDS_AUTH and session.user_id is None:
@@ -139,16 +191,12 @@ class Gate:
             if args.get("user_id") != session.user_id:
                 raise Blocked("ownership", "You can only access the authenticated customer's own profile.")
         if "order_id" in args and tool in NEEDS_AUTH:
-            owner = self.conn.execute(f"SELECT user_id FROM {self.s}.orders WHERE order_id = %s",
-                                      (args["order_id"],)).fetchone()
-            if owner is not None and owner[0] != session.user_id:
+            owner = self._order_owner(args["order_id"])
+            if owner is not None and owner != session.user_id:
                 raise Blocked("ownership", "This order belongs to a different customer. You can only help the "
                                            "authenticated customer with their own orders.")
         if "payment_method_id" in args and tool in WRITE_TOOLS:
-            ok = self.conn.execute(
-                f"SELECT 1 FROM {self.s}.payment_methods WHERE user_id = %s AND payment_method_id = %s",
-                (session.user_id, args["payment_method_id"])).fetchone()
-            if ok is None:
+            if not self._owns_payment_method(session.user_id, args["payment_method_id"]):
                 raise Blocked("ownership", "That payment method does not belong to the authenticated customer.")
         if tool in WRITE_TOOLS and not session.confirmation:
             raise Blocked("confirmation", "Before this change, list the exact action details to the customer and "
@@ -166,7 +214,7 @@ class Gate:
         """Money that moves if this write runs (refund, charge or transfer between payment methods)."""
         if tool in ("modify_pending_order_address", "modify_user_address"):
             return Decimal("0")
-        order = self.store._order(args["order_id"])
+        order = self._order(args["order_id"])
         if tool in ("cancel_pending_order", "modify_pending_order_payment"):
             return sum((Decimal(str(p["amount"])) for p in order["payment_history"]
                         if p["transaction_type"] == "payment"), Decimal("0"))
@@ -176,10 +224,9 @@ class Gate:
         # exchange / modify items: the net price difference charged or refunded
         diff = Decimal("0")
         for old, new in zip(args.get("item_ids", []), args.get("new_item_ids", []), strict=False):
-            row = self.conn.execute(f"SELECT price FROM {self.s}.variants WHERE item_id = %s LIMIT 1",
-                                    (new,)).fetchone()
-            if row is not None:
-                diff += row[0] - prices.get(old, Decimal("0"))
+            price = self._variant_price(new)
+            if price is not None:
+                diff += price - prices.get(old, Decimal("0"))
         return abs(diff)
 
     def _write(self, session: Session, tool: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -191,6 +238,7 @@ class Gate:
             return {"ok": True, "duplicate": True, "note": "This exact change was already applied; nothing was "
                                                            "done again.", "result": prior[0]}
         amount = self.amount_at_stake(tool, args)
+        trace.get_current_span().set_attribute("order_ops.amount_usd", float(amount))
         if amount > Decimal(str(session.approval_threshold)):
             session.stats["approvals"] += 1
             if not session.auto_approve:

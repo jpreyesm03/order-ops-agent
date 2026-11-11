@@ -86,6 +86,14 @@ export default function Console() {
                   </p>
                   <p className="text-xs text-muted">
                     {money(a.amount)} · requested {new Date(a.created_at).toLocaleTimeString()} · {a.approval_id}
+                    {a.trace_url && (
+                      <>
+                        {" · "}
+                        <a href={a.trace_url} target="_blank" rel="noreferrer" className="underline hover:text-foreground">
+                          trace
+                        </a>
+                      </>
+                    )}
                   </p>
                 </div>
                 <button onClick={() => decide(a.approval_id, false)} className="rounded border border-line px-3 py-1 hover:bg-background">
@@ -108,7 +116,14 @@ export default function Console() {
             {history.map((a) => (
               <li key={a.approval_id} className="flex items-center justify-between gap-2 px-4 py-2">
                 <span className="truncate font-mono text-xs">{a.summary}</span>
-                <StatusPill status={a.status} />
+                <span className="flex items-center gap-2">
+                  {a.trace_url && (
+                    <a href={a.trace_url} target="_blank" rel="noreferrer" className="text-xs text-muted underline">
+                      trace
+                    </a>
+                  )}
+                  <StatusPill status={a.status} />
+                </span>
               </li>
             ))}
           </ul>

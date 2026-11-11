@@ -22,8 +22,8 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from . import aws, db
-from .agent import Agent
+from . import aws, db, tracing
+from .agent import Agent, finish_turn, traced_turn
 from .gate import Gate, Session
 from .shopify import MIRROR_SQL, ShopifyClient, ShopifyStore, apply_webhook, verify_webhook
 from .store import ToolError
@@ -82,6 +82,7 @@ def ensure_live(conn) -> None:
 async def lifespan(app: FastAPI):
     global _client
     aws.load_ssm_params()  # Lambda: secrets from SSM; no-op elsewhere
+    tracing.setup()  # off unless ORDER_OPS_TRACE_ENDPOINT or ORDER_OPS_TRACE_XRAY is set
     conn = db.connect()
     ensure_live(conn)
     conn.close()
@@ -95,6 +96,14 @@ app.add_middleware(
     allow_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3005").split(",") if o.strip()],
     allow_methods=["*"], allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def flush_traces(request: Request, call_next):
+    response = await call_next(request)
+    if tracing.enabled():  # Lambda freezes the process after the response: send this request's spans first
+        await run_in_threadpool(tracing.flush)
+    return response
 
 
 def get_conn():
@@ -170,18 +179,25 @@ def _save_session(conn, session: Session, messages: list[dict], extra: dict) -> 
                  (Jsonb(state), Jsonb(messages), session.session_id))
 
 
+APPROVAL_COLS = ("a.approval_id, a.tool, a.order_id, a.amount, a.summary, a.status, a.decided_by, a.decision_note, "
+                 "a.created_at, a.decided_at, a.session_id, s.state->'_extra'->'trace'")
+
+
 def _approvals_for(conn, session_id: str) -> list[dict]:
     rows = conn.execute(
-        f"SELECT approval_id, tool, order_id, amount, summary, status, decided_by, decision_note, created_at, "
-        f"decided_at FROM {LIVE}.approvals WHERE session_id = %s ORDER BY created_at", (session_id,)).fetchall()
+        f"SELECT {APPROVAL_COLS} FROM {LIVE}.approvals a LEFT JOIN {LIVE}.sessions s USING (session_id) "
+        f"WHERE a.session_id = %s ORDER BY a.created_at", (session_id,)).fetchall()
     return [_approval_dict(r) for r in rows]
 
 
 def _approval_dict(r) -> dict:
     keys = ["approval_id", "tool", "order_id", "amount", "summary", "status", "decided_by", "decision_note",
-            "created_at", "decided_at"]
+            "created_at", "decided_at", "session_id", "trace"]
     d = dict(zip(keys, r, strict=True))
     d["amount"] = db.money(d["amount"])
+    trace_ids = d.pop("trace")
+    d["trace_id"] = trace_ids["trace_id"] if trace_ids else None
+    d["trace_url"] = tracing.trace_url(trace_ids)
     return d
 
 
@@ -195,7 +211,8 @@ def healthz(conn=Depends(get_conn)) -> dict:
 def create_session(conn=Depends(get_conn)) -> dict:
     sid = "ses_" + uuid.uuid4().hex[:12]
     session = Session(session_id=sid, approval_threshold=THRESHOLD)
-    extra = {"transcript": [{"role": "assistant", "text": GREETING, "ts": time.time()}], "notified": []}
+    extra = {"transcript": [{"role": "assistant", "text": GREETING, "ts": time.time()}], "notified": [],
+             "trace": tracing.start_conversation(sid, **{"order_ops.channel": "web", "order_ops.backend": BACKEND})}
     conn.execute(f"INSERT INTO {LIVE}.sessions (session_id, state, messages) VALUES (%s, %s, %s)",
                  (sid, Jsonb(session.to_json() | {"_extra": extra}), Jsonb([])))
     return {"session_id": sid, "greeting": GREETING, "approval_threshold": THRESHOLD}
@@ -205,7 +222,8 @@ def create_session(conn=Depends(get_conn)) -> dict:
 def get_session(session_id: str, conn=Depends(get_conn)) -> dict:
     session, _, extra = _load_session(conn, session_id)
     return {"session_id": session_id, "user_id": session.user_id, "transcript": extra["transcript"],
-            "approvals": _approvals_for(conn, session_id), "gate": session.stats}
+            "approvals": _approvals_for(conn, session_id), "gate": session.stats,
+            "trace_url": tracing.trace_url(extra.get("trace"))}
 
 
 @app.post("/api/sessions/{session_id}/messages", dependencies=[Depends(rate_limit)])
@@ -222,7 +240,10 @@ def post_message(session_id: str, body: MessageIn, conn=Depends(get_conn)) -> di
             extra["notified"].append(a["approval_id"])
     agent = Agent(make_gate(conn), client=_client)
     started = time.perf_counter()
-    turn = agent.respond(session, messages, body.text, notices=notices)
+    turn_no = sum(1 for t in extra["transcript"] if t["role"] == "user") + 1
+    with tracing.in_conversation(extra.get("trace")), traced_turn(turn_no, "single", body.text) as sp:
+        turn = agent.respond(session, messages, body.text, notices=notices)
+        finish_turn(sp, turn, agent.usage.cost(agent.model))
     latency_ms = round((time.perf_counter() - started) * 1000)
     now = time.time()
     events = [{"tool": c["name"], "args": c["args"], "ok": c["result"].get("ok", False),
@@ -241,16 +262,20 @@ def post_message(session_id: str, body: MessageIn, conn=Depends(get_conn)) -> di
 @app.get("/api/approvals")
 def list_approvals(status: str = "pending", conn=Depends(get_conn)) -> list[dict]:
     where, params = ("", ()) if status == "all" else ("WHERE status = %s", (status,))
+    where = where.replace("status", "a.status")
     rows = conn.execute(
-        f"SELECT approval_id, tool, order_id, amount, summary, status, decided_by, decision_note, created_at, "
-        f"decided_at FROM {LIVE}.approvals {where} ORDER BY created_at DESC LIMIT 200", params).fetchall()
+        f"SELECT {APPROVAL_COLS} FROM {LIVE}.approvals a LEFT JOIN {LIVE}.sessions s USING (session_id) "
+        f"{where} ORDER BY a.created_at DESC LIMIT 200", params).fetchall()
     return [_approval_dict(r) for r in rows]
 
 
 @app.post("/api/approvals/{approval_id}/decision")
 def decide(approval_id: str, body: DecisionIn, conn=Depends(get_conn)) -> dict:
+    row = conn.execute(f"SELECT s.state->'_extra'->'trace' FROM {LIVE}.approvals a JOIN {LIVE}.sessions s "
+                       f"USING (session_id) WHERE a.approval_id = %s", (approval_id,)).fetchone()
     try:
-        return make_gate(conn).decide(approval_id, body.approve, body.reviewer, body.note)
+        with tracing.in_conversation(row[0] if row else None):  # the decision joins the conversation's trace
+            return make_gate(conn).decide(approval_id, body.approve, body.reviewer, body.note)
     except ToolError as e:
         raise HTTPException(409, str(e)) from e
 
