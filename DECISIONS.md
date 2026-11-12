@@ -306,3 +306,38 @@ added under it as they come in.
     (injection + a customer who says "ok") tests the model, with the gate as a weak backstop.
   - 10 tasks is a smoke test of known attacks, not a robustness claim.
 - **Cost:** 10 tasks × 4 trials × 2 modes = 80 episodes, about $1.50 at the τ² cost prior (~$0.02 each).
+
+## D26. Voice channel: Twilio ConversationRelay into the same agent and gate, on Lambda
+- **Constraint:** a phone number anyone can call to cancel an order or start a return, with the same
+  agent, tools, gate, approvals and audit as the chat. Target < 1.5 s to first audio. The API runs on Lambda
+  (~$0 idle, D20), and Lambda can't hold a websocket open.
+- **Options (chosen 2026-11-11):**
+  | | Twilio ConversationRelay (chosen) | Pipecat + Media Streams | Speech-to-speech model |
+  |---|---|---|---|
+  | Who does speech ↔ text | Twilio (barge-in included) | us (Deepgram + a TTS vendor) | the model |
+  | Hosting | API Gateway WebSocket → existing Lambda | always-on container | always-on container |
+  | Idle cost | ~$1.15/mo (number) | ~$12–25/mo + number | ~$12–25/mo + number |
+  | Per minute | ~$0.07 relay + $0.0085 call + Claude | ~$0.06 | ~$0.10–0.30 |
+  | New accounts | Twilio | Twilio, Deepgram, TTS | Twilio, OpenAI/Google |
+  | Evals carry over | yes, same Claude agent | yes | no, different model |
+- **Why:** keeps the $0-idle architecture and the evaluated agent, and adds one account. What it gives up: we
+  don't build the audio pipeline. The voice problems that matter for the product stay in our code: consent on
+  transcripts, ids misheard, latency while tools run, barge-in history.
+- **How it works:** `POST /voice/incoming` (Twilio-signed) returns TwiML that connects the call to our websocket.
+  Twilio sends `setup` / `prompt` (transcribed) / `interrupt` / `dtmf`; we answer with `text` tokens. Two
+  transports, one handler (`voice_event`): `/voice/ws` (any long-running host, local dev through a tunnel) and
+  API Gateway WebSocket → `POST /voice/events` on the Lambda, replies through the management API.
+- **Voice-specific rules:**
+  - Consent: a hedged answer ("yeah, I guess", "maybe") is passed to the gate as no confirmation at all.
+  - The voice prompt adds: spoken style, read back emails/ids before using them, ids character by character.
+  - A filler line ("One moment while I check that.") if the answer isn't ready after 1.2 s; the answer preempts it.
+  - Barge-in: the model's history keeps only what the caller heard, so it doesn't assume they heard the rest.
+  - Two utterances at once (Lambda can run them on two instances): the second is queued in the call's row and
+    joined into the next turn, never run in parallel.
+- **Cost guards:** 30 calls/day (`VOICE_CALLS_PER_DAY`), 8 min per call, then a goodbye. The websocket accepts
+  only the secret embedded in the signed TwiML.
+- **Measured without a phone:** `evaluate.py --channel voice` runs the 40 test tasks with the voice prompt and
+  customer messages rewritten as speech-to-text output (lowercase, no punctuation, emails spoken). The report
+  shows the chat → voice gap. Real calls log time to first audio per turn (p50/p95 from the sessions table).
+- **Limits:** replies aren't token-streamed yet (sentence chunks after the full turn); the filler hides tool time,
+  not model time. The API Gateway setup (`scripts/voice_aws.sh`) is untested until a Twilio account exists.

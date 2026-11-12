@@ -41,3 +41,11 @@ def invoke_self_async(payload: dict) -> None:
     if os.getenv("LAMBDA_ALIAS"):
         target += ":" + os.environ["LAMBDA_ALIAS"]
     boto3.client("lambda").invoke(FunctionName=target, InvocationType="Event", Payload=json.dumps(payload).encode())
+
+
+def post_to_connection(connection_id: str, message: dict) -> None:
+    """Send one message down an API Gateway WebSocket connection (the voice channel on Lambda)."""
+    import boto3
+
+    client = boto3.client("apigatewaymanagementapi", endpoint_url=os.environ["VOICE_WS_CALLBACK_URL"])
+    client.post_to_connection(ConnectionId=connection_id, Data=json.dumps(message).encode())

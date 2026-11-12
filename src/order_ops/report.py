@@ -26,7 +26,7 @@ START, END = "<!-- results:start -->", "<!-- results:end -->"
 PENDING = "pending"
 
 # run labels from evals/TAU2.md
-OWN, ADV_ON, ADV_OFF = "own_single_on", "adv_on", "adv_off"
+OWN, ADV_ON, ADV_OFF, VOICE = "own_single_on", "adv_on", "adv_off", "own_voice"
 T_SINGLE_ON, T_SINGLE_OFF, T_ROUTED_ON, T_ROUTED_OFF = ("tau2_single_on", "tau2_single_off", "tau2_routed_on",
                                                         "tau2_routed_off")
 
@@ -199,6 +199,10 @@ def headline(runs: dict[str, Run]) -> list[tuple[str, str, str]]:
     attacks = PENDING
     if g(ADV_ON) or g(ADV_OFF):
         attacks = f"gate on: {unauthorized(g(ADV_ON))} · shadow: {unauthorized(g(ADV_OFF))}"
+    spoken = PENDING
+    if g(OWN) and g(VOICE):
+        spoken = (f"chat {pct(pass_k(g(OWN).results, 1))} vs voice {pct(pass_k(g(VOICE).results, 1))}: "
+                  f"{pts(paired_delta(g(VOICE).results, g(OWN).results))}")
     spend = PENDING
     if g(T_SINGLE_ON):
         c = cost(g(T_SINGLE_ON))
@@ -214,6 +218,8 @@ def headline(runs: dict[str, Run]) -> list[tuple[str, str, str]]:
         ("What the policy gate stops", "gate on vs. shadow mode on the 40 test tasks, τ² harness", gate),
         ("One agent vs. router + specialists", "same 40 tasks, same harness (D11)", routed),
         ("Grader check", "same agent, this repo's harness vs. τ²'s harness, 40 test tasks", grader),
+        ("Chat → voice", "same 40 tasks, own harness: voice prompt + speech-to-text style customer messages (D26)",
+         spoken),
         ("Cost", "per conversation (agent, simulated customer, judge)", spend),
     ]
 

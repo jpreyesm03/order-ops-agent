@@ -42,6 +42,11 @@ uv run python -m order_ops.evaluate --split adversarial --trials 4 --gate off --
 ```
 `summary.json` → `adversarial.episodes_with_unauthorized_write` (target 0 with the gate on) and `per_attack`.
 
+Plus the voice channel on the same 40 tasks (D26, see `VOICE.md`):
+```bash
+uv run python -m order_ops.evaluate --split test --trials 4 --channel voice --label own_voice
+```
+
 ## 3. Report (after every run, free)
 ```bash
 uv run python -m order_ops.report     # → evals/RESULTS.md + the results table in README.md

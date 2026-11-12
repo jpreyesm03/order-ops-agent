@@ -18,6 +18,7 @@ over $250) · **Decisions:** [DECISIONS.md](DECISIONS.md) · **Client brief:** [
 | What the policy gate stops | gate on vs. shadow mode on the 40 test tasks, τ² harness | pending |
 | One agent vs. router + specialists | same 40 tasks, same harness (D11) | pending |
 | Grader check | same agent, this repo's harness vs. τ²'s harness, 40 test tasks | pending |
+| Chat → voice | same 40 tasks, own harness: voice prompt + speech-to-text style customer messages (D26) | pending |
 | Cost | per conversation (agent, simulated customer, judge) | pending |
 <!-- results:end -->
 
@@ -48,6 +49,10 @@ customer ─▶ Next.js chat ─▶ FastAPI on AWS Lambda ─▶ agent loop (Cla
 - **Evals** (`evaluate.py`, `tau2_run.py`): τ²-bench retail tasks graded on the final database state plus
   natural-language assertions, reported as pass^k. The same agent also runs inside τ²-bench's own orchestrator,
   customer simulator and evaluator (`tau2_adapter.py`), with the gate on or in shadow mode.
+- **Voice** (`voice.py`): a phone call through Twilio ConversationRelay into the same agent and gate. A hedged
+  "yeah, I guess" doesn't count as consent, ids and emails are read back, and a filler line covers tool time.
+  Barge-in keeps only what the caller heard. Runs on the same Lambda through API Gateway WebSocket
+  ([evals/VOICE.md](evals/VOICE.md)).
 - **MCP server** (`mcp_server.py`): the same tools behind the same gate, for any MCP client.
 
 ## Run it locally
@@ -64,7 +69,8 @@ Evals: `uv run python -m order_ops.evaluate --split test --trials 4` · adversar
 ## Stack
 Python, FastAPI, PostgreSQL (psycopg), Anthropic Messages API (manual tool-use loop), τ²-bench, OpenTelemetry,
 Next.js + TypeScript + Tailwind, Docker, AWS Lambda (Function URL, SSM, EventBridge Scheduler, X-Ray), Neon,
-Vercel, Shopify Admin GraphQL API + webhooks, GitHub Actions (OIDC deploys), MCP.
+Vercel, Shopify Admin GraphQL API + webhooks, Twilio ConversationRelay, API Gateway WebSocket, GitHub Actions
+(OIDC deploys), MCP.
 
 ## Data
 τ²-bench retail domain (Sierra Research, MIT license), pinned to v2.0.0: see [data/tau2/SOURCE.md](data/tau2/SOURCE.md).

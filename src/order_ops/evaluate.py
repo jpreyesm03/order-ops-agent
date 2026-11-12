@@ -29,7 +29,7 @@ from typing import Any
 import anthropic
 from psycopg.types.json import Jsonb
 
-from . import db, tracing
+from . import db, tracing, voice
 from .agent import Agent, Usage, finish_turn, traced_turn
 from .gate import Gate, Session
 from .router import RoutedAgent
@@ -138,7 +138,7 @@ def judge_nl(client: anthropic.Anthropic, transcript: str, assertions: list[str]
 
 
 def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: float,
-                arch: str = "single", gate_mode: str = "on") -> dict[str, Any]:
+                arch: str = "single", gate_mode: str = "on", channel: str = "chat") -> dict[str, Any]:
     conn = db.connect()
     schema = f"ep_{uuid.uuid4().hex[:10]}"
     started = time.perf_counter()
@@ -149,7 +149,10 @@ def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: 
         gate = Gate(conn, schema, enforce=gate_mode == "on")
         session = Session(session_id=f"eval-{task['id']}-{trial}", auto_approve="attack" not in task,
                           approval_threshold=threshold)
-        agent = RoutedAgent(gate, client=client) if arch == "routed" else Agent(gate, client=client)
+        if channel == "voice":  # D26: voice prompt + spoken-consent rule; customer text as a speech transcript
+            agent = voice.voice_agent(gate, client)
+        else:
+            agent = RoutedAgent(gate, client=client) if arch == "routed" else Agent(gate, client=client)
         sim = UserSimulator(scenario_text(task), client=client)
         messages: list[dict] = []
         transcript = [f"assistant: {GREETING}"]
@@ -165,8 +168,12 @@ def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: 
                 break
             transcript.append(f"user: {customer}")
             spent = agent.cost() if arch == "routed" else agent.usage.cost(agent.model)
-            with tracing.in_conversation(trace_ids), traced_turn(turn_no, arch, customer) as sp:
-                turn = agent.respond(session, messages, customer)
+            heard = voice.as_transcript(customer) if channel == "voice" else customer
+            with tracing.in_conversation(trace_ids), traced_turn(turn_no, arch, heard) as sp:
+                if channel == "voice":
+                    turn = agent.respond(session, messages, heard, gate_text=voice.spoken_consent(heard))
+                else:
+                    turn = agent.respond(session, messages, customer)
                 finish_turn(sp, turn, (agent.cost() if arch == "routed" else agent.usage.cost(agent.model)) - spent)
             tool_calls += turn.tool_calls
             agent_text = turn.reply
@@ -192,6 +199,7 @@ def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: 
             "nl_ok": nl_ok, "nl": nl, "diff": diff[:20], "end": end or "max_turns",
             "turns": sum(1 for t in transcript if t.startswith("user:")),
             "gold_writes": gold_writes, "did_writes": did_writes, "gate": session.stats, "gate_mode": gate_mode,
+            "channel": channel,
             "attack": (task.get("attack") or {}).get("name"),
             "unauthorized_writes": unauthorized_writes(task, tool_calls),
             "tool_calls": tool_calls, "transcript": transcript,
@@ -273,9 +281,13 @@ def main() -> None:
     ap.add_argument("--label", default=time.strftime("run_%Y%m%d_%H%M"))
     ap.add_argument("--arch", default="single", choices=["single", "routed"])
     ap.add_argument("--gate", default="on", choices=["on", "off"], help="off = shadow mode (counts, never blocks)")
+    ap.add_argument("--channel", default="chat", choices=["chat", "voice"],
+                    help="voice: the voice prompt, and customer messages turned into speech-to-text style (D26)")
     ap.add_argument("--threshold", type=float, default=float(os.getenv("APPROVAL_THRESHOLD_USD", "250")))
     args = ap.parse_args()
 
+    if args.channel == "voice" and args.arch == "routed":
+        ap.error("the voice channel runs the single agent only")
     tasks = load_tasks("all" if args.tasks and args.split != "adversarial" else args.split)
     if args.tasks:
         wanted = set(args.tasks.split(","))
@@ -293,7 +305,8 @@ def main() -> None:
     results: list[dict] = []
     t0, spent = time.perf_counter(), 0.0
     with ThreadPoolExecutor(args.concurrency) as pool, open(out_dir / "results.jsonl", "w") as f:
-        futures = [pool.submit(run_episode, t, i, client, args.threshold, args.arch, args.gate) for t, i in jobs]
+        futures = [pool.submit(run_episode, t, i, client, args.threshold, args.arch, args.gate, args.channel)
+                   for t, i in jobs]
         for n, fut in enumerate(as_completed(futures), 1):
             r = fut.result()
             results.append(r)
@@ -309,7 +322,7 @@ def main() -> None:
                   + f" · ${spent:.2f} so far · ETA {eta / 60:.0f} min", flush=True)
     summary = summarize(results, args.trials) | {
         "label": args.label, "split": args.split if not args.tasks else f"tasks:{args.tasks}",
-        "trials": args.trials, "arch": args.arch, "gate": args.gate,
+        "trials": args.trials, "arch": args.arch, "gate": args.gate, "channel": args.channel,
         "agent_model": os.getenv("AGENT_MODEL", "claude-haiku-5-5"),
         "agent_effort": os.getenv("AGENT_EFFORT", "medium"), "approval_threshold": args.threshold,
     }

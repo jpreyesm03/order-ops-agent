@@ -1,11 +1,18 @@
 """HTTP API for the live demo: customer chat, supervisor approval inbox, order/customer views, audit log.
 
     uv run uvicorn order_ops.api:app --port 8055 --reload
+
+Voice (D26): Twilio calls POST /voice/incoming, then holds a ConversationRelay websocket either to /voice/ws
+(long-running host, local dev through a tunnel) or to API Gateway WebSocket, which forwards each message to
+POST /voice/events on this Lambda (scripts/voice_aws.sh). Same agent, gate, approvals and audit as the chat.
 """
 from __future__ import annotations
 
+import asyncio
+import datetime as dt
 import hmac
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -16,13 +23,13 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import anthropic
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from . import aws, db, tracing
+from . import aws, db, tracing, voice
 from .agent import Agent, finish_turn, traced_turn
 from .gate import Gate, Session
 from .shopify import MIRROR_SQL, ShopifyClient, ShopifyStore, apply_webhook, verify_webhook
@@ -164,8 +171,9 @@ class DecisionIn(BaseModel):
 
 
 # ---------- sessions / chat ----------
-def _load_session(conn, session_id: str) -> tuple[Session, list[dict], dict]:
-    row = conn.execute(f"SELECT state, messages FROM {LIVE}.sessions WHERE session_id = %s", (session_id,)).fetchone()
+def _load_session(conn, session_id: str, lock: bool = False) -> tuple[Session, list[dict], dict]:
+    row = conn.execute(f"SELECT state, messages FROM {LIVE}.sessions WHERE session_id = %s"
+                       + (" FOR UPDATE" if lock else ""), (session_id,)).fetchone()
     if row is None:
         raise HTTPException(404, "Session not found")
     state, messages = row
@@ -231,13 +239,7 @@ def post_message(session_id: str, body: MessageIn, conn=Depends(get_conn)) -> di
     session, messages, extra = _load_session(conn, session_id)
     if sum(1 for t in extra["transcript"] if t["role"] == "user") >= MAX_TURNS_PER_SESSION:
         raise HTTPException(429, "This conversation is too long for the demo. Start a new one.")
-    # tell the agent about supervisor decisions it hasn't seen yet
-    notices = []
-    for a in _approvals_for(conn, session_id):
-        if a["status"] != "pending" and a["approval_id"] not in extra["notified"]:
-            notices.append(f"Supervisor update: request {a['approval_id']} ({a['summary']}) was {a['status']}"
-                           + (f". Note: {a['decision_note']}" if a["decision_note"] else "") + ".")
-            extra["notified"].append(a["approval_id"])
+    notices = _new_notices(conn, session_id, extra)
     agent = Agent(make_gate(conn), client=_client)
     started = time.perf_counter()
     turn_no = sum(1 for t in extra["transcript"] if t["role"] == "user") + 1
@@ -256,6 +258,164 @@ def post_message(session_id: str, body: MessageIn, conn=Depends(get_conn)) -> di
     return {"reply": turn.reply, "events": events, "transferred": turn.transferred, "user_id": session.user_id,
             "approvals": _approvals_for(conn, session_id), "latency_ms": latency_ms,
             "cost_usd": round(agent.usage.cost(agent.model), 5)}
+
+
+def _new_notices(conn, session_id: str, extra: dict) -> list[str]:
+    """Supervisor decisions the agent hasn't been told about yet (marked as told)."""
+    notices = []
+    for a in _approvals_for(conn, session_id):
+        if a["status"] != "pending" and a["approval_id"] not in extra["notified"]:
+            notices.append(f"Supervisor update: request {a['approval_id']} ({a['summary']}) was {a['status']}"
+                           + (f". Note: {a['decision_note']}" if a["decision_note"] else "") + ".")
+            extra["notified"].append(a["approval_id"])
+    return notices
+
+
+# ---------- voice: Twilio ConversationRelay (D26) ----------
+log = logging.getLogger("order_ops.voice")
+VOICE_CALLS_PER_DAY = int(os.getenv("VOICE_CALLS_PER_DAY", "30"))
+XML = "application/xml"
+
+
+def _voice_ready() -> bool:
+    return all(os.getenv(k) for k in ("TWILIO_AUTH_TOKEN", "VOICE_WS_URL", "VOICE_RELAY_SECRET"))
+
+
+def _secret_ok(given: str) -> bool:
+    secret = os.getenv("VOICE_RELAY_SECRET", "")
+    return bool(secret) and hmac.compare_digest(given, secret)
+
+
+async def _twilio_form(request: Request, path: str) -> dict[str, str]:
+    """The webhook's form, after checking Twilio's signature against the public URL Twilio called."""
+    form = {k: str(v) for k, v in (await request.form()).items()}
+    base = os.getenv("VOICE_PUBLIC_URL", str(request.base_url)).rstrip("/")
+    if not voice.valid_signature(os.environ["TWILIO_AUTH_TOKEN"], base + path, form,
+                                 request.headers.get("X-Twilio-Signature", "")):
+        raise HTTPException(403, "Bad Twilio signature")
+    return form
+
+
+@app.post("/voice/incoming")
+async def voice_incoming(request: Request, conn=Depends(get_conn)) -> Response:
+    """Twilio's webhook for a new call: TwiML that connects the call to our ConversationRelay websocket."""
+    if not _voice_ready():
+        return Response(voice.twiml_say("The voice line is not set up yet. Please use the chat."), media_type=XML)
+    await _twilio_form(request, "/voice/incoming")
+    day = f"voice:{dt.date.today().isoformat()}"
+    calls = conn.execute("INSERT INTO public.rate_limits AS r (bucket, hits, expires_at) VALUES (%s, 1, now() + "
+                         "interval '2 days') ON CONFLICT (bucket) DO UPDATE SET hits = r.hits + 1 RETURNING hits",
+                         (day,)).fetchone()[0]
+    if calls > VOICE_CALLS_PER_DAY:  # cost cap on a public number
+        return Response(voice.twiml_say("The demo line has reached today's call limit. Please try the chat."),
+                        media_type=XML)
+    base = os.getenv("VOICE_PUBLIC_URL", str(request.base_url)).rstrip("/")
+    ws = f"{os.environ['VOICE_WS_URL']}?t={os.environ['VOICE_RELAY_SECRET']}"
+    return Response(voice.twiml(ws, base + "/voice/ended"), media_type=XML)
+
+
+@app.post("/voice/ended")
+async def voice_ended(request: Request) -> Response:
+    if _voice_ready():
+        form = await _twilio_form(request, "/voice/ended")
+        log.info("call ended: %s %s", form.get("SessionStatus"), form.get("HandoffData", ""))
+    return Response('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>', media_type=XML)
+
+
+def voice_event(conn, call_id: str, msg: dict, send) -> None:  # noqa: ANN001
+    """One ConversationRelay message. Turns run one at a time per call, even when Lambda delivers two messages to
+    two instances at once: a busy call queues the new utterance, and the running turn picks it up when done."""
+    kind = msg.get("type")
+    if kind == "setup":
+        session, messages, extra = voice.new_call(call_id, msg, THRESHOLD)
+        extra["trace"] = tracing.start_conversation(call_id, **{"order_ops.channel": "voice",
+                                                                "order_ops.backend": BACKEND})
+        state = session.to_json() | {"_extra": extra}
+        conn.execute(f"INSERT INTO {LIVE}.sessions (session_id, state, messages) VALUES (%s, %s, %s) "
+                     f"ON CONFLICT (session_id) DO NOTHING", (call_id, Jsonb(state), Jsonb(messages)))
+        return
+    if kind == "error":
+        log.warning("relay error on %s: %s", call_id, msg.get("description"))
+        return
+    if kind not in ("prompt", "interrupt", "dtmf") or (kind == "prompt" and msg.get("last") is False):
+        return
+    with conn.transaction():
+        session, messages, extra = _load_session(conn, call_id, lock=True)
+        if kind == "interrupt":
+            if not extra["voice"]["busy"]:  # mid-turn interrupts concern the filler line; nothing to rewrite
+                voice.on_interrupt(messages, extra, msg.get("utteranceUntilInterrupt", ""))
+                _save_session(conn, session, messages, extra)
+            return
+        text = msg.get("voicePrompt", "") if kind == "prompt" else f"(the caller pressed the {msg.get('digit')} key)"
+        if not text.strip():
+            return
+        if extra["voice"]["busy"]:
+            extra["voice"]["pending"].append(text)
+            _save_session(conn, session, messages, extra)
+            return
+        extra["voice"]["busy"] = True
+        _save_session(conn, session, messages, extra)
+    while text:
+        session, messages, extra = _load_session(conn, call_id)
+        if voice.over_time(extra):
+            send({"type": "text", "token": voice.GOODBYE, "last": True})
+            send({"type": "end", "handoffData": '{"reasonCode": "max-duration"}'})
+            turn = None
+        else:
+            agent = voice.voice_agent(make_gate(conn), _client)
+            turn_no = sum(1 for t in extra["transcript"] if t["role"] == "user") + 1
+            with tracing.in_conversation(extra.get("trace")), traced_turn(turn_no, "voice", text) as sp:
+                turn = voice.take_turn(agent, session, messages, extra, text, send,
+                                       notices=_new_notices(conn, call_id, extra))
+                finish_turn(sp, turn, agent.usage.cost(agent.model))
+        with conn.transaction():
+            _, _, fresh = _load_session(conn, call_id, lock=True)
+            queued = fresh["voice"]["pending"]  # what the caller said while this turn ran: one combined turn
+            text = " ".join(queued) if turn is not None and not turn.transferred else ""
+            extra["voice"].update(pending=[], busy=bool(text))
+            _save_session(conn, session, messages, extra)
+
+
+@app.websocket("/voice/ws")
+async def voice_ws(ws: WebSocket, t: str = "") -> None:
+    """ConversationRelay over a direct websocket (long-running host, or local dev behind a tunnel)."""
+    if not _secret_ok(t):
+        await ws.close(code=1008)
+        return
+    await ws.accept()
+    call_id = "call_" + uuid.uuid4().hex[:12]
+    loop = asyncio.get_running_loop()
+
+    def send(m: dict) -> None:
+        asyncio.run_coroutine_threadsafe(ws.send_json(m), loop).result()
+
+    conn = db.connect()
+    try:
+        while True:
+            msg = await ws.receive_json()
+            await run_in_threadpool(voice_event, conn, call_id, msg, send)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        conn.close()
+
+
+@app.post("/voice/connect")
+def voice_connect(t: str = "") -> dict:
+    """API Gateway's $connect route: accept the websocket only with the secret from our TwiML."""
+    if not _secret_ok(t):
+        raise HTTPException(403, "Forbidden")
+    return {"ok": True}
+
+
+@app.post("/voice/events")
+def voice_events(msg: dict[str, Any], x_voice_secret: str = Header(default=""),
+                 x_connection_id: str = Header(default=""), conn=Depends(get_conn)) -> dict:
+    """API Gateway's $default route: one ConversationRelay message; replies go back through the connection."""
+    if not _secret_ok(x_voice_secret) or not x_connection_id:
+        raise HTTPException(403, "Forbidden")
+    voice_event(conn, "call_" + x_connection_id, msg, lambda m: aws.post_to_connection(x_connection_id, m))
+    return {"ok": True}
 
 
 # ---------- supervisor console ----------
