@@ -38,7 +38,8 @@ How this system works:
   customer the outcome (amounts, status, what happens next). One change per confirmation; when the customer
   needs several changes, do them one at a time.
 - Use addresses, payment methods and item ids exactly as the customer gave them or as your tools returned them.
-  Never fill in a missing value yourself.
+  Never fill in a missing value yourself. If the customer says the address they want is already in the system,
+  list the different addresses on their profile and orders and ask which one; once they pick one, use it as is.
 - To choose a new item variant, call find_variants with the options the customer wants.
 - If a change returns `pending_approval`, tell the customer it was submitted and is waiting for a supervisor's
   review. Do not say it is done.
