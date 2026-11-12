@@ -1,0 +1,6 @@
+{"run": "train_v0", "source": "hand review, evals/SEVERITY_REVIEW.md (2026-11-12); 87:1 corrected after reading the full transcript (the customer gave the zip)",
+ "labels": {"0:0": "agent_process_error", "19:0": "agent_process_error", "28:0": "agent_process_error",
+            "31:1": "customer_driven", "66:0": "customer_driven", "66:1": "customer_driven",
+            "87:1": "customer_driven", "91:1": "agent_process_error", "98:0": "customer_driven",
+            "98:1": "customer_driven", "99:0": "agent_wrong_change", "104:0": "agent_process_error",
+            "109:1": "agent_wrong_change", "110:1": "customer_driven"}}

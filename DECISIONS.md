@@ -459,3 +459,18 @@ added under it as they come in.
 - **Prompt:** the preamble now explains the two-step flow and "never fill in a value yourself"; tool
   descriptions say the first call returns a summary. The policy text is unchanged.
 - **Cost of the design:** one extra model step per change (the proposal). Measured in the dev loop (D30).
+
+## D32. P0 results: excluded tasks, failure reviewer accuracy, and how A3 will be counted
+- **Label audit (`label_audit.py`, evals/LABEL_AUDIT.md):** of 114 tasks, 2 have an expected answer a
+  policy-following agent can't produce, and are excluded from the D30 bars: **64** (expects an exchange on a
+  pending order; τ²'s own tool refuses it) and **105** (gift card $17.00 below the $21.10 difference; τ²'s tool
+  refuses it too, so the expected database is unchanged but the judge expects an exchange).
+- **Failure reviewer (`reviewer.py`, Sonnet 5.5):** calibration set (train_v0, 14 flagged episodes) 13/14 = 93%;
+  fresh validation set (train_v2, 11 episodes, hand-labelled before the reviewer saw them) 8/11 = 73%; combined
+  21/25 = 84%, just under the 85% bar. The 3 fresh disagreements are ambiguous instructions ("same type as the one
+  I received", "return everything"). The reviewer also caught a hand-label mistake: in task 87 the customer typed
+  the zip code (the hand review had read a truncated excerpt); corrected, with the evidence.
+- **How A3/A4 are counted in the final run:** the reviewer triages every flagged episode, then **every flagged
+  episode is read by hand** (expected: tens of episodes out of ~616), and the hand verdict counts. Disagreements
+  with the reviewer are listed. The reviewer alone is used only for the train dev loop.
+- **Corrected baseline estimate:** real wrong changes on train_v0 = 2 of 146 (1.4%; tasks 99 and 109).

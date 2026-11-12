@@ -1,0 +1,5 @@
+{"run": "train_v2", "source": "hand review written before the reviewer saw these episodes (2026-11-12)",
+ "labels": {"0:0": "agent_process_error", "14:0": "agent_wrong_change", "23:0": "customer_driven",
+            "23:1": "customer_driven", "43:1": "customer_driven", "59:0": "customer_driven",
+            "66:0": "customer_driven", "66:1": "customer_driven", "72:0": "customer_driven",
+            "98:0": "customer_driven", "98:1": "customer_driven"}}

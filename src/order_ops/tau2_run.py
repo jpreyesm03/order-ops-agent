@@ -132,6 +132,9 @@ def run_episode(config: TextRunConfig, task: Any, trial: int, user_model: str) -
             "judge_cost_usd": round(judge_cost, 5),
             "cost_usd": round(rep["agent_cost_usd"] + user_cost + judge_cost, 5),
             "trace_id": rep["trace_id"], "wall_s": round(time.perf_counter() - started, 1),
+            "transcript": [f"{'user' if isinstance(m, UserMessage) else 'assistant'}: {m.content}"
+                           for m in sim.messages if getattr(m, "content", None)
+                           and type(m).__name__ in ("UserMessage", "AssistantMessage")],
         }
     except Exception as e:  # noqa: BLE001 - one broken episode must not kill the run
         return {"task_id": task.id, "trial": trial, "reward": 0.0, "error": f"{type(e).__name__}: {e}",
