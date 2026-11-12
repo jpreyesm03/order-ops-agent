@@ -72,3 +72,15 @@ def test_session_hands_out_done_lines_then_summary_once():
     s.new_summary = "Please confirm this change."
     assert s.take_summary() == "Done: Default address of account u1 changed.\n\nPlease confirm this change."
     assert s.take_summary() is None
+
+
+def test_summary_warns_about_mentioned_items_left_out_of_a_one_shot_change():
+    order = {"status": "delivered", "items": [
+        {"item_id": "a", "name": "Bookshelf", "options": {}, "price": 10},
+        {"item_id": "b", "name": "Jigsaw Puzzle", "options": {}, "price": 5}]}
+    args = {"order_id": "#W1", "item_ids": ["a"], "payment_method_id": "pm"}
+    said = "I want to return both bookshelves and both jigsaw puzzles."
+    assert confirm.left_out("return_delivered_order_items", args, order, said) == ["Jigsaw Puzzle"]
+    text = confirm.summary("return_delivered_order_items", args, order, lambda _: None, said=said)
+    assert "Warning: you mentioned Jigsaw Puzzle" in text
+    assert confirm.left_out("return_delivered_order_items", args, order, "just the bookshelf") == []

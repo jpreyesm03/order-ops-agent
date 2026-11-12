@@ -106,8 +106,22 @@ def _opts(options: dict | None) -> str:
     return ", ".join(f"{k} {v}" for k, v in (options or {}).items())
 
 
+def mentioned(name: str, said: str) -> bool:
+    """Did the customer name this product (plural-tolerant: "bookshelves" matches "Bookshelf")?"""
+    said = said.lower()
+    return any(w[:max(4, len(w) - 2)] in said for w in name.lower().split() if len(w) > 3)
+
+
+def left_out(tool: str, args: dict[str, Any], order: dict | None, said: str) -> list[str]:
+    """Items on this order the customer talked about but this one-shot change leaves out."""
+    if tool not in ONE_SHOT or not order:
+        return []
+    chosen = set(args.get("item_ids") or [])
+    return [i["name"] for i in order.get("items", []) if i["item_id"] not in chosen and mentioned(i["name"], said)]
+
+
 def summary(tool: str, args: dict[str, Any], order: dict | None, variant: Callable[[str], dict | None],
-            needs_approval: bool = False) -> str:
+            needs_approval: bool = False, said: str = "") -> str:
     """The confirmation the customer sees, built only from the call's arguments and the store's data."""
     target = args.get("order_id") or args.get("user_id")
     lines = ["Please confirm this change. Reply \"yes\" to go ahead, or tell me what to change.",
@@ -153,6 +167,10 @@ def summary(tool: str, args: dict[str, Any], order: dict | None, variant: Callab
         if others:
             lines.append("- Also on this order, NOT included: " + "; ".join(others))
         lines.append("- " + ONE_SHOT[tool])
+        missing = left_out(tool, args, order, said)
+        if missing:
+            lines.append(f"- Warning: you mentioned {', '.join(sorted(set(missing)))}, also on this order. It can't "
+                         "be added later; to include it, tell me now.")
     if needs_approval:
         lines.append("- This amount needs a supervisor's approval before it is final.")
     return "\n".join(lines)

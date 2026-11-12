@@ -67,10 +67,12 @@ class Session:
     new_summary: str | None = None        # summary created in this turn, still to be shown to the customer
     new_done: list = field(default_factory=list)  # "Done: ..." lines for changes that ran this turn
     seen: str = ""                        # customer messages + tool results of this conversation (provenance)
+    said: str = ""                        # the customer's own messages only
 
     def on_customer_message(self, text: str) -> None:
         self.confirmation = is_confirmation(text)
         self.remember(text)
+        self.said = (self.said + "\n" + str(text))[-SEEN_LIMIT:]
         if self.pending is None:
             return
         if self.confirmation:
@@ -286,14 +288,19 @@ class Gate:
             approval = self.amount_at_stake(tool, args) > Decimal(str(session.approval_threshold))
         except (ToolError, KeyError, TypeError):
             approval = False
-        text = confirm.summary(tool, args, order, self._variant_info, needs_approval=approval)
+        text = confirm.summary(tool, args, order, self._variant_info, needs_approval=approval, said=session.said)
+        missing = confirm.left_out(tool, args, order, session.said)
         session.pending = {"tool": tool, "fp": fp, "summary": text}
         session.new_summary = text
         session.stats["proposals"] = session.stats.get("proposals", 0) + 1
-        return {"ok": False, "needs_confirmation": True, "summary": text,
+        out = {"ok": False, "needs_confirmation": True, "summary": text,
                 "instruction": "Nothing was changed yet. This summary is shown to the customer. Wait for their "
                                "explicit yes, then call this tool again with exactly the same arguments. If they "
                                "want something different, call the tool with the new details instead."}
+        if missing:
+            out["instruction"] += (f" The customer mentioned {', '.join(sorted(set(missing)))} on this same order; it "
+                                   "can't be changed separately later. Ask whether to include it in this one change.")
+        return out
 
     def _already_done(self, session: Session, tool: str, args: dict[str, Any]) -> bool:
         key = self._key(session.session_id, tool, args)
