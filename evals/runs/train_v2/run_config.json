@@ -1,0 +1,10 @@
+{
+  "split": "train",
+  "arch": "single",
+  "gate": "on",
+  "channel": "chat",
+  "agent_model": "claude-haiku-5-5",
+  "agent_effort": "medium",
+  "approval_threshold": 250.0,
+  "backend": "subscription"
+}

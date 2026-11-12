@@ -1,0 +1,37 @@
+{
+  "pass^1": 0.812,
+  "pass^2": 0.713,
+  "pass^3": 0.637,
+  "pass^4": 0.575,
+  "episodes": 160,
+  "errors": 0,
+  "db_match_rate": 0.825,
+  "nl_ok_rate": 0.975,
+  "blocked_by_gate": {
+    "confirmation": 3
+  },
+  "would_block_if_on": {},
+  "approvals_needed": 50,
+  "duplicate_writes_stopped": 0,
+  "agent_cost_per_episode_usd": 0.0053,
+  "total_cost_usd": 1.557,
+  "avg_agent_latency_ms_per_call": 5003,
+  "avg_turns": 6.9,
+  "label": "sub_final_routed",
+  "trials": 4,
+  "split": "test",
+  "arch": "routed",
+  "gate": "on",
+  "channel": "chat",
+  "agent_model": "claude-haiku-5-5",
+  "agent_effort": "medium",
+  "approval_threshold": 250.0,
+  "backend": "subscription",
+  "stopped": null,
+  "planned_episodes": 160,
+  "complete": true,
+  "plan_usage_at_end": {
+    "five_hour": 0.2,
+    "seven_day": 0.34
+  }
+}

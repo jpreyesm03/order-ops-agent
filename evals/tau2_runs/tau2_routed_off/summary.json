@@ -1,0 +1,47 @@
+{
+  "pass^1": 0.806,
+  "pass^2": 0.75,
+  "pass^3": 0.706,
+  "pass^4": 0.675,
+  "episodes": 160,
+  "errors": 0,
+  "db_match_rate": 0.819,
+  "nl_ok_rate": 0.988,
+  "blocked_by_gate": {},
+  "would_block_if_on": {
+    "confirmation": 7
+  },
+  "would_block_in_failed_episodes": 3,
+  "would_block_in_passed_episodes": 4,
+  "approvals_needed": 52,
+  "terminations": {
+    "TerminationReason.USER_STOP": 160
+  },
+  "avg_turns": 9.0,
+  "avg_agent_calls": 25.0,
+  "cost_per_episode_usd": {
+    "agent": 0.0065,
+    "user": 0.0042,
+    "judge": 0.0037,
+    "total": 0.0144
+  },
+  "total_cost_usd": 2.303,
+  "label": "sub_tau2_routed_off",
+  "tasks": 40,
+  "trials": 4,
+  "arch": "routed",
+  "gate": "off",
+  "agent_model": "claude-haiku-5-5",
+  "user_model": "claude-haiku-5-5",
+  "judge_model": "claude-sonnet-5-5",
+  "tau2_commit": "989d3285ae669e49503324bdb9981bf14fccedeb",
+  "configuration": "custom (D22)",
+  "backend": "subscription",
+  "stopped": null,
+  "planned_episodes": 160,
+  "complete": true,
+  "plan_usage_at_end": {
+    "five_hour": 0.3,
+    "seven_day": 0.38
+  }
+}

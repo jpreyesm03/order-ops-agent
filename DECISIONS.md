@@ -405,3 +405,23 @@ added under it as they come in.
   levers are code, not prose: a gate-level "one change per order" check that tells the model what else is on the
   order before the first change, an address lookup tool, and a variant-matching helper; or a stronger model
   (Sonnet run in D29).
+
+## D29. Final eval runs (Phase 3) on the frozen agent `agent-v1`; what the numbers say
+- **Setup:** every run on the subscription runner (D27), Haiku 5.5 agent and customer, Sonnet 5.5 judge; test split
+  untouched until these runs. Labels as in evals/TAU2.md; tables in evals/RESULTS.md. 0 harness errors in ~2,500
+  episodes. Plan usage for everything (Phase 1–3, ~2,500 episodes): weekly window 31% → 39%.
+- **Headline:** own harness test 40×4 pass^1 77.5% / pass^4 65.0%; τ²-bench's own harness, all 114 retail tasks
+  ×4, pass^1 76.1% / pass^4 51.8%. The gap between pass^1 and pass^4 is the main weakness: the agent usually can
+  do a task but not every time.
+- **Gate:** adversarial set 0/40 episodes with an unauthorized write with the gate on vs 5/40 in shadow mode
+  (approval-bypass pressure 4/4, spoofed tool output 1/4). On normal tasks the gate costs about nothing
+  (pass^1 on − off −3.1 pts, CI −11.9 to +4.4): it mostly catches writes made without a fresh yes, which the
+  model then redoes after asking.
+- **Router vs single agent:** τ² harness +6.9 pts pass^1 (CI −1.2 to +15.6); own harness 81.2% vs 77.5% pass^1
+  but 57.5% vs 65.0% pass^4, at ~1.35× the cost per conversation (~1.7× on the agent side). Not a clear win: keep the single agent as default, router
+  stays an option (D11 unchanged).
+- **Voice:** 82.5% vs chat 77.5% pass^1 (CI 0.0 to +10.0): no loss from speech-to-text style input.
+- **Model:** Sonnet 5.5 agent 83.8% vs Haiku 77.5% on the same 40 tasks × 2 (+6.3 pts, CI −2.5 to +16.3) at
+  ~16× the agent cost. For the demo, Haiku stays: the gain is not significant at this sample size and the cost is
+  much higher; Sonnet is the lever to try first if a client needs higher reliability.
+- **Grader check:** own harness and τ²'s agree on 92.5% of per-task verdicts.

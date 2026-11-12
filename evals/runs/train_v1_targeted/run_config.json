@@ -1,0 +1,10 @@
+{
+  "split": "tasks:0,15,19,28,46,66,67,87,98,99,104,105,110",
+  "arch": "single",
+  "gate": "on",
+  "channel": "chat",
+  "agent_model": "claude-haiku-5-5",
+  "agent_effort": "medium",
+  "approval_threshold": 250.0,
+  "backend": "subscription"
+}

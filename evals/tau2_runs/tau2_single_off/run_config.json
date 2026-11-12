@@ -1,0 +1,11 @@
+{
+  "tasks": "5,9,12,17,18,26,27,32,33,36,38,39,40,42,45,49,51,53,55,56,60,61,62,64,65,68,70,71,74,77,79,86,90,94,97,100,101,102,108,111",
+  "arch": "single",
+  "gate": "off",
+  "agent_model": "claude-haiku-5-5",
+  "user_model": "claude-haiku-5-5",
+  "user_args": "{\"temperature\": 0.0}",
+  "judge_model": "claude-sonnet-5-5",
+  "max_steps": 200,
+  "backend": "subscription"
+}

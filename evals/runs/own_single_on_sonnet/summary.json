@@ -1,0 +1,36 @@
+{
+  "pass^1": 0.838,
+  "pass^2": 0.75,
+  "episodes": 80,
+  "errors": 0,
+  "db_match_rate": 0.85,
+  "nl_ok_rate": 0.988,
+  "blocked_by_gate": {
+    "confirmation": 3,
+    "ownership": 1
+  },
+  "would_block_if_on": {},
+  "approvals_needed": 25,
+  "duplicate_writes_stopped": 0,
+  "agent_cost_per_episode_usd": 0.0502,
+  "total_cost_usd": 4.312,
+  "avg_agent_latency_ms_per_call": 6124,
+  "avg_turns": 5.7,
+  "label": "sub_final_sonnet",
+  "trials": 2,
+  "split": "test",
+  "arch": "single",
+  "gate": "on",
+  "channel": "chat",
+  "agent_model": "claude-sonnet-5-5",
+  "agent_effort": "medium",
+  "approval_threshold": 250.0,
+  "backend": "subscription",
+  "stopped": null,
+  "planned_episodes": 80,
+  "complete": true,
+  "plan_usage_at_end": {
+    "five_hour": 0.37,
+    "seven_day": 0.39
+  }
+}
