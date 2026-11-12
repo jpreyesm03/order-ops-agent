@@ -51,7 +51,7 @@ def test_mcp_server_enforces_the_gate(schema):
             await session.call_tool("find_user_id_by_email", {"email": email})
             out = _text(await session.call_tool("cancel_pending_order", {
                 "order_id": oid, "reason": "no longer needed", "customer_confirmation": "what does that mean?"}))
-            assert out["blocked_by_policy"] == "confirmation"
+            assert out["needs_confirmation"] and oid in out["summary"]  # nothing ran: the summary comes first
             out = _text(await session.call_tool("cancel_pending_order", {
                 "order_id": oid, "reason": "no longer needed", "customer_confirmation": "Yes, cancel it."}))
             assert out["ok"] and out["result"]["status"] == "cancelled"

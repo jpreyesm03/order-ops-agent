@@ -16,6 +16,7 @@ from tau2.runner import build_environment, get_tasks, run_simulation  # noqa: E4
 from tau2.user.user_simulator_base import STOP, HalfDuplexUser, UserState  # noqa: E402
 from test_agent_loop import FakeClient, route, say, tool  # noqa: E402
 
+from order_ops.gate import GATE_TOOLS  # noqa: E402
 from order_ops.tool_specs import TOOLS  # noqa: E402
 
 TASK, ORDER, EMAIL = "38", "#W9348897", "daiki.sanchez1479@example.com"  # task 38: one cancellation
@@ -40,22 +41,42 @@ def test_tool_specs_match_tau2():
     """The app's tool definitions are the ones τ² executes: same names and required arguments."""
     env = build_environment("retail")
     theirs = {t.name: set(t.openai_schema["function"]["parameters"].get("required", [])) for t in env.get_tools()}
-    ours = {t["name"]: set(t["input_schema"].get("required", [])) for t in TOOLS}
+    ours = {t["name"]: set(t["input_schema"].get("required", [])) for t in TOOLS if t["name"] not in GATE_TOOLS}
     assert ours == theirs
 
 
-def test_gate_on_blocks_unconfirmed_write_and_tau2_never_sees_it():
+def test_gate_on_proposes_unconfirmed_write_and_tau2_never_sees_it():
     agent, client, env = _agent([tool("find_user_id_by_email", email=EMAIL),
                                  tool("cancel_pending_order", order_id=ORDER, reason="no longer needed"),
                                  say("Please confirm you want to cancel.")])
     reply = _drive(agent, env, f"cancel {ORDER}, my email is {EMAIL}")
-    assert reply.content == "Please confirm you want to cancel."
+    assert reply.content.startswith("Please confirm you want to cancel.") and ORDER in reply.content  # + summary
     assert env.tools.db.orders[ORDER].status == "pending"
     rep = agent.report()
-    assert rep["gate_stats"]["blocked"] == {"confirmation": 1}
+    assert rep["gate_stats"]["blocked"] == {} and rep["gate_stats"]["proposals"] == 1
     assert [c["ran_in_tau2"] for c in rep["tool_calls"]] == [True, False]
-    blocked = json.loads(client.requests[2]["messages"][-1]["content"][0]["content"])  # what the model saw
-    assert blocked["blocked_by_policy"] == "confirmation"
+    proposal = json.loads(client.requests[2]["messages"][-1]["content"][0]["content"])  # what the model saw
+    assert proposal["needs_confirmation"] and ORDER in proposal["summary"]
+
+
+def test_invented_address_is_blocked():
+    agent, _, env = _agent([tool("find_user_id_by_email", email=EMAIL),
+                            tool("modify_pending_order_address", order_id=ORDER, address1="1 Invented St",
+                                 address2="", city="Nowhere", state="ZZ", country="USA", zip="00000"),
+                            say("I need your address.")])
+    _drive(agent, env, f"change the address of {ORDER}, I'm {EMAIL}")
+    assert agent.report()["gate_stats"]["blocked"] == {"provenance": 1}
+
+
+def test_find_variants_is_answered_locally():
+    product = next(iter(build_environment("retail").tools.db.products.values()))
+    opt = next(iter(next(iter(product.variants.values())).options.items()))
+    agent, _, env = _agent([tool("find_user_id_by_email", email=EMAIL),
+                            tool("find_variants", product_id=product.product_id, wanted_options={opt[0]: opt[1]}),
+                            say("Here are the options.")])
+    _drive(agent, env, f"what variants are there? I'm {EMAIL}")
+    call = agent.report()["tool_calls"][1]
+    assert call["ran_in_tau2"] is False and call["result"]["result"]["best_matches"][0]["matches"] == 1
 
 
 def test_gate_off_lets_it_through_and_records_what_it_would_have_blocked():
@@ -77,14 +98,15 @@ def test_ownership_uses_tau2_database():
 
 
 def test_one_yes_pays_for_one_write_and_duplicates_are_stopped():
-    agent, _, env = _agent([tool("find_user_id_by_email", email=EMAIL), say("Confirm?"),
+    agent, _, env = _agent([tool("find_user_id_by_email", email=EMAIL),
+                            tool("cancel_pending_order", order_id=ORDER, reason="no longer needed"), say("Confirm?"),
                             tool("cancel_pending_order", order_id=ORDER, reason="no longer needed"),
                             tool("cancel_pending_order", order_id=ORDER, reason="no longer needed"), say("Done.")])
     _drive(agent, env, f"cancel {ORDER}, I'm {EMAIL}")
     _drive(agent, env, "yes")
     stats = agent.report()["gate_stats"]
     assert stats["writes"] == 1 and stats["approvals"] == 1  # $1,166.98 is above the $250 threshold
-    assert stats["blocked"] == {"confirmation": 1}  # the second call: the yes was already spent
+    assert stats["duplicates"] == 1  # the repeated call: answered as already done, not run again
 
 
 def test_routed_handoff_and_specialist_tools():

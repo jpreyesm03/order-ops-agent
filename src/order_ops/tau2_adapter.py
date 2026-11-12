@@ -57,9 +57,9 @@ from tau2.data_model.message import (  # noqa: E402
     UserMessage,
 )
 
-from . import tracing  # noqa: E402
-from .agent import MAX_STEPS, PREAMBLE, Usage, make_agent  # noqa: E402
-from .gate import AUTH_TOOLS, Blocked, Gate, Session, record_outcome  # noqa: E402
+from . import confirm, tracing  # noqa: E402
+from .agent import MAX_STEPS, PREAMBLE, Usage, make_agent, with_summary  # noqa: E402
+from .gate import AUTH_TOOLS, GATE_TOOLS, Blocked, Gate, Session, record_outcome  # noqa: E402
 from .router import HANDOFF_TOOL, READS, SPECIALISTS, route, specialist_prompt  # noqa: E402
 from .store import ALL_TOOLS, WRITE_TOOLS, ToolError  # noqa: E402
 from .tool_specs import TOOLS, TOOLS_BY_NAME  # noqa: E402
@@ -101,6 +101,25 @@ class Tau2Gate(Gate):
     def _audit_raw(self, session_id: str, tool: str, tier: str, args: dict, outcome: str, detail: str) -> None:
         self.audit.append({"tool": tool, "tier": tier, "outcome": outcome, "detail": detail})
 
+    def _already_done(self, session: Session, tool: str, args: dict[str, Any]) -> bool:
+        return self._key(session.session_id, tool, args) in self.done_keys
+
+    def _variant_info(self, item_id: str) -> dict | None:
+        for p in self.tdb.products.values():
+            if item_id in p.variants:
+                v = p.variants[item_id].model_dump(mode="json")
+                return {"item_id": item_id, "options": v.get("options"), "available": v.get("available"),
+                        "price": v.get("price")}
+        return None
+
+    def gate_tool(self, tool: str, args: dict[str, Any]) -> Any:
+        if tool == "find_variants":
+            p = self.tdb.products.get(args.get("product_id", ""))
+            if p is None:
+                raise ToolError("Product not found")
+            return confirm.rank_variants(p.model_dump(mode="json"), args.get("wanted_options") or {})
+        raise ToolError(f"Unknown tool {tool}")
+
     # ---------- the two halves of Gate.run, around τ² executing the call ----------
     def _stop(self, session: Session, rule: str, message: str) -> dict | None:
         if self.enforce:
@@ -124,10 +143,23 @@ class Tau2Gate(Gate):
             return out
 
     def _review(self, session: Session, tool: str, args: dict[str, Any], tier: str) -> dict | None:
+        if tool in GATE_TOOLS:  # answered here; τ² never sees it (read-only)
+            try:
+                result = self.gate_tool(tool, args)
+            except ToolError as e:
+                return {"ok": False, "error": str(e)}
+            session.remember(json.dumps(result, default=str))
+            return {"ok": True, "result": result}
         if tool not in ALL_TOOLS:
             return None  # τ² answers unknown tools itself
         try:
             self._check(session, tool, args)
+        except Blocked as b:
+            self._audit(session, tool, tier, args, "blocked" if self.enforce else "would_block", b.rule)
+            stopped = self._stop(session, b.rule, str(b))
+            if stopped is not None:
+                return stopped
+        try:
             if tool in WRITE_TOOLS:
                 if self._key(session.session_id, tool, args) in self.done_keys:
                     session.stats["duplicates"] += 1
@@ -136,11 +168,11 @@ class Tau2Gate(Gate):
                         return {"ok": True, "duplicate": True,
                                 "note": "This exact change was already applied; nothing was done again."}
                     return None
+                proposal = self.propose(session, tool, args)
+                if proposal is not None:
+                    return proposal
                 if self.amount_at_stake(tool, args) > Decimal(str(session.approval_threshold)):
                     session.stats["approvals"] += 1  # eval mode: counted, then executed (as in the app's evals)
-        except Blocked as b:
-            self._audit(session, tool, tier, args, "blocked" if self.enforce else "would_block", b.rule)
-            return self._stop(session, b.rule, str(b))
         except (ToolError, KeyError, TypeError):
             return None  # bad arguments: τ²'s tool reports the error, as it would without the gate
         return None
@@ -151,6 +183,7 @@ class Tau2Gate(Gate):
         if error:
             session.stats["errors"] += 1
             return {"ok": False, "error": content or "error"}
+        session.remember(content or "")
         try:
             result: Any = json.loads(content) if content else content
         except json.JSONDecodeError:
@@ -165,6 +198,7 @@ class Tau2Gate(Gate):
         if tool in WRITE_TOOLS:
             self.done_keys.add(self._key(session.session_id, tool, args))
             session.confirmation = False  # one "yes" pays for one successful change
+            session.confirmed = None
             session.stats["writes"] += 1
         return {"ok": True, "result": result}
 
@@ -265,6 +299,7 @@ class P5Tau2Agent(HalfDuplexAgent[dict]):
         self.histories[self.current].append({"role": "user", "content": blocks})
 
     def _reply(self, text: str) -> AssistantMessage:
+        text = with_summary(self.session, text)
         if self.arch == "routed":
             self.transcript.append(f"Agent: {text}")
             self.seen[self.current] = len(self.transcript)

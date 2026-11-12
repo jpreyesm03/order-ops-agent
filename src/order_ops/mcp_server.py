@@ -26,8 +26,9 @@ WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_
 server = MCPServer(
     "order-ops",
     instructions="Retail store operations under a written policy. Authenticate the customer first "
-                 "(find_user_id_by_email or find_user_id_by_name_zip). Before any change, show the details to "
-                 "the customer and pass their exact confirming words as customer_confirmation.",
+                 "(find_user_id_by_email or find_user_id_by_name_zip). A change tool's first call only returns a "
+                 "confirmation summary: show it to the customer, then call the same tool with the same arguments "
+                 "and their exact confirming words as customer_confirmation.",
 )
 
 _conn = None

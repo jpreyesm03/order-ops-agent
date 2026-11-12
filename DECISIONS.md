@@ -439,3 +439,23 @@ added under it as they come in.
   with the hand labels, then: Haiku dev loop on train (max 3 rounds, stop when a round improves no bar) → Sonnet
   and Opus on train → choose the cheapest configuration meeting A1–A6 on train (if none, most bars met, ties by
   cost) → one final run on test.
+
+## D31. Code checks against wrong changes (C1–C4)
+- **C1, confirmation rendered by code:** a change tool's first call changes nothing; it returns `needs_confirmation`
+  with a summary built by `confirm.summary` from the exact arguments and the store's data (items, options, prices,
+  price difference, refund target, address). The harness appends it to the agent's reply, so the customer always
+  sees it. The customer's next explicit yes binds to a fingerprint of those arguments (`confirm.fingerprint`;
+  item pairs order-insensitive); only an identical call then runs. A "no" drops the proposal; a hedged or
+  unrelated answer leaves it pending. Replaces "any yes in the latest message pays for one write".
+- **C2, provenance:** every address field, payment method id and item id in a change must appear in the
+  customer's messages or a tool result of this conversation (`confirm.unsourced`, normalized: case, punctuation,
+  street-word abbreviations); otherwise `blocked_by_policy: provenance`.
+- **C3, one change per order made visible:** for exchanges, returns and item modifications the summary lists the
+  order's items that are NOT included and what the change rules out afterwards.
+- **C4, `find_variants`:** a read tool answered by the gate (not τ²): variants ranked by matched options, every
+  option value listed, availability shown.
+- **Where:** `gate.py` (all channels: web, voice, MCP, evals), `Tau2Gate` (τ² harness), `confirm.py`.
+  Shadow mode (gate off) still lets every write run and counts what would have been stopped.
+- **Prompt:** the preamble now explains the two-step flow and "never fill in a value yourself"; tool
+  descriptions say the first call returns a summary. The policy text is unchanged.
+- **Cost of the design:** one extra model step per change (the proposal). Measured in the dev loop (D30).

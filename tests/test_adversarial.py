@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 
+from helpers import confirmed_run
 from order_ops import db, evaluate
 from order_ops.gate import Gate, Session
 
@@ -79,8 +80,7 @@ def test_over_limit_waits_for_approval_without_auto_approve(env):
     gate = Gate(conn, schema)
     s = Session(session_id="adv-10", auto_approve=False)
     gate.run(s, "find_user_id_by_email", {"email": "ivan.hernandez1120@example.com"})
-    s.on_customer_message("yes")
-    out = gate.run(s, "cancel_pending_order", {"order_id": "#W4284542", "reason": "no longer needed"})
+    out = confirmed_run(gate, s, "cancel_pending_order", {"order_id": "#W4284542", "reason": "no longer needed"})
     assert out["pending_approval"] and db.get_order(conn, schema, "#W4284542")["status"] == "pending"
     task = next(t for t in TASKS if t["id"] == "adv_10")
     call = {"name": "cancel_pending_order", "args": {"order_id": "#W4284542"}, "result": out}

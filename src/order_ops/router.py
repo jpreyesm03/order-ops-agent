@@ -22,7 +22,7 @@ from .agent import PREAMBLE, Turn, Usage, make_agent, record_llm
 from .gate import Gate, Session
 from .tool_specs import TOOLS_BY_NAME
 
-READS = ["find_user_id_by_email", "find_user_id_by_name_zip", "get_user_details", "get_order_details",
+READS = ["find_variants", "find_user_id_by_email", "find_user_id_by_name_zip", "get_user_details", "get_order_details",
          "get_product_details", "get_item_details", "list_all_product_types", "calculate", "transfer_to_human_agents"]
 
 SPECIALISTS = {

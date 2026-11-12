@@ -101,7 +101,8 @@ def test_call_hedged_yes_is_not_consent(client, monkeypatch):
     monkeypatch.setattr(voice, "FILLER_AFTER_S", 0.01)  # every model call takes 50 ms: the filler line goes first
     api._client = SlowClient([
         tool("find_user_id_by_email", email=email), say("Thanks, I found your account. What can I do?"),
-        say(f"To confirm, cancel order {oid} because you no longer need it. Is that right?"),
+        tool("cancel_pending_order", order_id=oid, reason="no longer needed"),
+        say("I can cancel it. Is that right?"),
         tool("cancel_pending_order", order_id=oid, reason="no longer needed"),
         say("I need a clear yes to cancel it. Should I cancel it?"),
         tool("cancel_pending_order", order_id=oid, reason="no longer needed"),
@@ -117,7 +118,7 @@ def test_call_hedged_yes_is_not_consent(client, monkeypatch):
         ws.send_json({"type": "prompt", "voicePrompt": "I want to cancel my order, no longer needed", "last": True})
         _reply(ws)
         ws.send_json({"type": "prompt", "voicePrompt": "yeah, I guess", "last": True})
-        assert _reply(ws)[-1]["token"] == "Should I cancel it? "
+        assert "Should I cancel it?" in "".join(m["token"] for m in _reply(ws))
         conn = db.connect()
         assert db.get_order(conn, api.LIVE, oid)["status"] == "pending"
         ws.send_json({"type": "prompt", "voicePrompt": "Yes, cancel it.", "last": True})
@@ -131,7 +132,7 @@ def test_call_hedged_yes_is_not_consent(client, monkeypatch):
                        f"'CA42' ORDER BY updated_at DESC LIMIT 1").fetchone()[0]
     session, messages, extra = api._load_session(conn, sid)
     conn.close()
-    assert session.stats["blocked"] == {"confirmation": 1} and session.stats["writes"] == 1
+    assert session.stats["blocked"] == {} and session.stats["writes"] == 1 and session.stats["proposals"] == 2
     assert [t.get("hedged") for t in extra["transcript"] if t["role"] == "user"] == [False, False, True, False, False]
     assert extra["transcript"][-3]["heard"] == "Done." and extra["transcript"][-2]["text"].startswith("(the caller")
     assert any("did not hear the rest" in str(m["content"]) for m in messages)

@@ -60,10 +60,15 @@ def test_agent_cancels_after_yes(env):
     conn, schema, oid, email = env
     gate = Gate(conn, schema)
     s, history = Session("a1"), []
-    client = FakeClient([tool("find_user_id_by_email", email=email), say("Confirm cancelling?"),
+    client = FakeClient([tool("find_user_id_by_email", email=email),
+                         tool("cancel_pending_order", order_id=oid, reason="no longer needed"),
+                         say("Shall I cancel it?"),
                          tool("cancel_pending_order", order_id=oid, reason="no longer needed"), say("Done.")])
     agent = Agent(gate, client=client, model="claude-haiku-5-5")
-    agent.respond(s, history, f"cancel {oid}, my email is {email}")
+    first = agent.respond(s, history, f"cancel {oid}, my email is {email}")
+    assert first.tool_calls[1]["result"]["needs_confirmation"]
+    assert first.reply.startswith("Shall I cancel it?") and oid in first.reply  # code-rendered summary shown
+    assert db.get_order(conn, schema, oid)["status"] == "pending"
     turn = agent.respond(s, history, "yes please")
     assert turn.reply == "Done." and turn.tool_calls[0]["result"]["ok"]
     assert db.get_order(conn, schema, oid)["status"] == "cancelled"
@@ -72,13 +77,27 @@ def test_agent_cancels_after_yes(env):
 
 
 def test_model_cannot_skip_confirmation(env):
+    """Calling the same write twice in one turn doesn't run it: only the customer's yes to the summary does."""
     conn, schema, oid, email = env
     gate = Gate(conn, schema)
     client = FakeClient([tool("find_user_id_by_email", email=email),
+                         tool("cancel_pending_order", order_id=oid, reason="no longer needed"),
                          tool("cancel_pending_order", order_id=oid, reason="no longer needed"), say("ok")])
-    turn = Agent(gate, client=client).respond(Session("a2"), [], f"cancel {oid}, email {email}")
-    assert turn.tool_calls[1]["result"]["blocked_by_policy"] == "confirmation"
+    turn = Agent(gate, client=client).respond(Session("a2"), [], f"yes cancel {oid}, email {email}")
+    assert turn.tool_calls[1]["result"]["needs_confirmation"] and turn.tool_calls[2]["result"]["needs_confirmation"]
     assert db.get_order(conn, schema, oid)["status"] == "pending"
+
+
+def test_yes_binds_to_the_exact_call(env):
+    """A yes to one summary can't run a different change."""
+    conn, schema, oid, email = env
+    gate = Gate(conn, schema)
+    s = Session("a3", approval_threshold=1e9)
+    gate.run(s, "find_user_id_by_email", {"email": email})
+    assert gate.run(s, "cancel_pending_order", {"order_id": oid, "reason": "no longer needed"})["needs_confirmation"]
+    s.on_customer_message("yes")
+    out = gate.run(s, "cancel_pending_order", {"order_id": oid, "reason": "ordered by mistake"})
+    assert out["needs_confirmation"] and db.get_order(conn, schema, oid)["status"] == "pending"
 
 
 def test_router_recap_yes_is_not_a_confirmation(env):
@@ -94,7 +113,8 @@ def test_router_recap_yes_is_not_a_confirmation(env):
     agent.respond(s, [], f"yes, my email is {email}")      # turn 1: a 'yes' that is about something else
     turn = agent.respond(s, [], f"what about order {oid}?")  # turn 2: new specialist sees turn 1 in its recap
     assert "colleague" in client.requests[4]["messages"][-1]["content"]  # the recap was passed in
-    assert turn.tool_calls[0]["result"]["blocked_by_policy"] == "confirmation"
+    assert turn.tool_calls[0]["result"]["needs_confirmation"]
+    assert db.get_order(conn, schema, oid)["status"] == "pending"
 
 
 def test_handoff_does_not_reuse_the_yes(env):
@@ -103,6 +123,8 @@ def test_handoff_does_not_reuse_the_yes(env):
     gate = Gate(conn, schema)
     s = Session("r2", approval_threshold=1e9)
     gate.run(s, "find_user_id_by_email", {"email": email})
+    gate.run(s, "cancel_pending_order", {"order_id": oid, "reason": "no longer needed"})  # summary shown
+    s.remember("my new address is 1 A St, X, WA, USA 98105")
     client = FakeClient([
         route("orders"),
         tool("cancel_pending_order", order_id=oid, reason="no longer needed"),
@@ -113,4 +135,4 @@ def test_handoff_does_not_reuse_the_yes(env):
     ])
     turn = RoutedAgent(gate, client=client).respond(s, [], "yes")
     assert turn.tool_calls[0]["result"]["ok"]
-    assert turn.tool_calls[1]["result"]["blocked_by_policy"] == "confirmation"
+    assert turn.tool_calls[1]["result"]["needs_confirmation"]

@@ -14,6 +14,8 @@ _ADDRESS = {
     "zip": {"type": "string", "description": "Such as '12345'."},
 }
 _ADDR_KEYS = ["address1", "address2", "city", "state", "country", "zip"]
+CONFIRM = ("The first call only returns a confirmation summary for the customer; after their explicit yes, call again "
+           "with exactly the same arguments.")
 
 
 def _tool(name: str, description: str, props: dict, required: list[str] | None = None) -> dict:
@@ -26,15 +28,13 @@ TOOLS: list[dict] = [
     _tool("calculate", "Calculate a math expression with numbers, + - * / and parentheses, e.g. '2 + 2'.",
           {"expression": {"type": "string"}}),
     _tool("cancel_pending_order",
-          "Cancel a pending order (not processed or delivered). Explain the details and get explicit customer "
-          "confirmation first. Status becomes 'cancelled'; refunds go to gift cards immediately, otherwise in 5-7 "
-          "business days.",
+          "Cancel a pending order (not processed or delivered). Status becomes 'cancelled'; refunds go to gift cards "
+          "immediately, otherwise in 5-7 business days. " + CONFIRM,
           {"order_id": _ORDER_ID,
            "reason": {"type": "string", "enum": ["no longer needed", "ordered by mistake"]}}),
     _tool("exchange_delivered_order_items",
           "Exchange items of a delivered order for available items of the same product with different options. "
-          "Can only be done once per order, so collect every item first. Explain the details and get explicit "
-          "confirmation first.",
+          "Can only be done once per order, so collect every item first. " + CONFIRM,
           {"order_id": _ORDER_ID,
            "item_ids": {**_ITEM_LIST, "description": "Item ids to exchange (duplicates allowed)."},
            "new_item_ids": {**_ITEM_LIST, "description": "New item ids, same position and product as item_ids."},
@@ -55,27 +55,35 @@ TOOLS: list[dict] = [
           {"user_id": {"type": "string", "description": "Such as 'sara_doe_496'."}}),
     _tool("list_all_product_types", "List the name and product id of all 50 product types.", {}),
     _tool("modify_pending_order_address",
-          "Change the shipping address of a pending order. Get explicit confirmation first.",
+          "Change the shipping address of a pending order. " + CONFIRM,
           {"order_id": _ORDER_ID, **_ADDRESS}, ["order_id", *_ADDR_KEYS]),
     _tool("modify_pending_order_items",
           "Swap items in a pending order for available items of the same product with different options. Can only "
-          "be called once per order (status becomes 'pending (item modified)'), so collect every item first and "
-          "get explicit confirmation.",
+          "be called once per order (status becomes 'pending (item modified)'), so collect every item first. "
+          + CONFIRM,
           {"order_id": _ORDER_ID,
            "item_ids": {**_ITEM_LIST, "description": "Item ids to modify (duplicates allowed)."},
            "new_item_ids": {**_ITEM_LIST, "description": "New item ids, same position and product as item_ids."},
            "payment_method_id": _PM_ID}),
     _tool("modify_pending_order_payment",
-          "Change the payment method of a pending order. Get explicit confirmation first.",
+          "Change the payment method of a pending order. " + CONFIRM,
           {"order_id": _ORDER_ID, "payment_method_id": _PM_ID}),
-    _tool("modify_user_address", "Change a user's default address. Get explicit confirmation first.",
+    _tool("modify_user_address", "Change a user's default address. " + CONFIRM,
           {"user_id": {"type": "string"}, **_ADDRESS}, ["user_id", *_ADDR_KEYS]),
     _tool("return_delivered_order_items",
           "Return items of a delivered order. Refund goes to the original payment method or an existing gift card. "
-          "Status becomes 'return requested'. Get explicit confirmation first.",
+          "Status becomes 'return requested'. " + CONFIRM,
           {"order_id": _ORDER_ID,
            "item_ids": {**_ITEM_LIST, "description": "Item ids to return (duplicates allowed)."},
            "payment_method_id": _PM_ID}),
+    {"name": "find_variants",
+     "description": "Rank a product's variants by how well they match the options the customer wants. Shows every "
+                    "option value (names may differ from the customer's words) and availability.",
+     "input_schema": {"type": "object", "additionalProperties": False, "required": ["product_id", "wanted_options"],
+                      "properties": {"product_id": {"type": "string"},
+                                     "wanted_options": {
+                                         "type": "object", "additionalProperties": {"type": "string"},
+                                         "description": 'Option name to wanted value, e.g. {"size": "8"}.'}}}},
     _tool("transfer_to_human_agents",
           "Transfer to a human agent with a summary. Only if the customer explicitly asks for a human, or the "
           "request cannot be handled with the policy and tools.",

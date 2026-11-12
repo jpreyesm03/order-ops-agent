@@ -5,7 +5,11 @@ Every tool call from the model goes through `Gate.run`:
   2. identity      user/order data and every write need an authenticated customer (found by email or name+zip)
   3. one customer  after authentication, lookups that resolve to a different customer are blocked
   4. ownership     orders, users and payment methods must belong to the authenticated customer
-  5. confirmation  a write needs an explicit "yes" in the customer's latest message; each "yes" pays for one write
+  5. confirmation  a write first returns a summary rendered by code from its exact arguments (shown to the
+                   customer); it runs only when called again with the same arguments after the customer's explicit
+                   "yes" to that summary (D31)
+  5b. provenance   addresses, payment methods and item ids in a write must come from the customer's words or from
+                   tool results of this conversation (D31)
   6. approval      money movements above the threshold wait for a human (live) or are counted (eval)
   7. idempotency   the same write with the same arguments in the same session runs once
   8. audit         every call is logged with its outcome
@@ -28,10 +32,12 @@ import psycopg
 from opentelemetry import trace
 from psycopg.types.json import Jsonb
 
-from . import db, tracing
+from . import confirm, db, tracing
 from .store import READ_TOOLS, WRITE_TOOLS, Store, ToolError, call
 
 AUTH_TOOLS = {"find_user_id_by_email", "find_user_id_by_name_zip"}
+GATE_TOOLS = {"find_variants"}  # answered by the gate itself from the store's data (D31)
+SEEN_LIMIT = 400_000  # characters of conversation data kept for the provenance check
 NEEDS_AUTH = {"get_user_details", "get_order_details"} | WRITE_TOOLS
 
 _YES = re.compile(
@@ -51,14 +57,33 @@ def is_confirmation(text: str) -> bool:
 class Session:
     session_id: str
     user_id: str | None = None            # authenticated customer
-    confirmation: bool = False            # an unused explicit "yes" from the customer's latest message
+    confirmation: bool = False            # the customer's latest message is an explicit "yes" (shadow mode check)
     auto_approve: bool = False            # eval mode: approvals are counted, then executed
     approval_threshold: float = 250.0
     stats: dict[str, Any] = field(default_factory=lambda: {"blocked": {}, "approvals": 0, "duplicates": 0,
-                                                          "writes": 0, "errors": 0})
+                                                          "writes": 0, "errors": 0, "proposals": 0})
+    pending: dict | None = None           # proposal shown to the customer: {"tool", "fp", "summary"}
+    confirmed: str | None = None          # fingerprint of the proposal the customer said yes to
+    new_summary: str | None = None        # summary created in this turn, still to be shown to the customer
+    seen: str = ""                        # customer messages + tool results of this conversation (provenance)
 
     def on_customer_message(self, text: str) -> None:
         self.confirmation = is_confirmation(text)
+        self.remember(text)
+        if self.pending is None:
+            return
+        if self.confirmation:
+            self.confirmed, self.pending = self.pending["fp"], None
+        elif _NO_START.search(text):
+            self.pending = None  # declined; a new proposal is needed
+
+    def remember(self, text: str) -> None:
+        self.seen = (self.seen + "\n" + str(text))[-SEEN_LIMIT:]
+
+    def take_summary(self) -> str | None:
+        """The confirmation summary created in this turn (once), for the harness to show the customer."""
+        s, self.new_summary = self.new_summary, None
+        return s
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -111,8 +136,13 @@ class Gate:
 
     def _run(self, session: Session, tool: str, args: dict[str, Any], tier: str) -> dict[str, Any]:
         try:
-            if tool not in READ_TOOLS | WRITE_TOOLS:
+            if tool not in READ_TOOLS | WRITE_TOOLS | GATE_TOOLS:
                 raise ToolError(f"Unknown tool {tool}")
+            if tool in GATE_TOOLS:
+                result = self.gate_tool(tool, args)
+                session.remember(json.dumps(result, default=str))
+                self._audit(session, tool, tier, args, "ok")
+                return {"ok": True, "result": result}
             try:
                 self._check(session, tool, args)
             except Blocked as b:
@@ -120,8 +150,13 @@ class Gate:
                     raise
                 self._shadow(session, tool, tier, args, b.rule)
             if tool in WRITE_TOOLS:
+                if not self._already_done(session, tool, args):
+                    proposal = self.propose(session, tool, args)
+                    if proposal is not None:
+                        return proposal
                 return self._write(session, tool, args)
             result = call(self.store, tool, args)
+            session.remember(json.dumps(result, default=str))
             if tool in AUTH_TOOLS:
                 try:
                     self._authenticate(session, result)
@@ -219,10 +254,58 @@ class Gate:
         if "payment_method_id" in args and tool in WRITE_TOOLS:
             if not self._owns_payment_method(session.user_id, args["payment_method_id"]):
                 raise Blocked("ownership", "That payment method does not belong to the authenticated customer.")
-        if tool in WRITE_TOOLS and not session.confirmation:
-            raise Blocked("confirmation", "Before this change, list the exact action details to the customer and "
-                                          "get an explicit 'yes' in their latest message. Each confirmation covers "
-                                          "one change.")
+        if tool in WRITE_TOOLS:
+            missing = confirm.unsourced(args, session.seen)
+            if missing:
+                raise Blocked("provenance", "These values didn't come from the customer or from account data you "
+                                            "looked up in this conversation: " + ", ".join(missing) + ". Ask the "
+                                            "customer for them or look them up; never fill them in yourself.")
+            if not self.enforce and not session.confirmation:
+                raise Blocked("confirmation", "No explicit yes from the customer for this change.")
+
+    # ---------- confirmation (D31) ----------
+    def propose(self, session: Session, tool: str, args: dict[str, Any]) -> dict | None:
+        """None if the customer said yes to exactly this call; otherwise the summary they must confirm."""
+        if not self.enforce:
+            return None  # shadow mode: the call runs as asked (the confirmation rule was counted in _check)
+        fp = confirm.fingerprint(tool, args)
+        if session.confirmed == fp:
+            return None
+        order = None
+        if args.get("order_id"):
+            try:
+                order = self._order(args["order_id"])
+            except ToolError:
+                order = None
+        try:
+            approval = self.amount_at_stake(tool, args) > Decimal(str(session.approval_threshold))
+        except (ToolError, KeyError, TypeError):
+            approval = False
+        text = confirm.summary(tool, args, order, self._variant_info, needs_approval=approval)
+        session.pending = {"tool": tool, "fp": fp, "summary": text}
+        session.new_summary = text
+        session.stats["proposals"] = session.stats.get("proposals", 0) + 1
+        return {"ok": False, "needs_confirmation": True, "summary": text,
+                "instruction": "Nothing was changed yet. This summary is shown to the customer. Wait for their "
+                               "explicit yes, then call this tool again with exactly the same arguments. If they "
+                               "want something different, call the tool with the new details instead."}
+
+    def _already_done(self, session: Session, tool: str, args: dict[str, Any]) -> bool:
+        key = self._key(session.session_id, tool, args)
+        return self.conn.execute(f"SELECT 1 FROM {self.s}.idempotency_keys WHERE key = %s",
+                                 (key,)).fetchone() is not None
+
+    def _variant_info(self, item_id: str) -> dict | None:
+        try:
+            return call(self.store, "get_item_details", {"item_id": item_id})
+        except ToolError:
+            return None
+
+    def gate_tool(self, tool: str, args: dict[str, Any]) -> Any:
+        if tool == "find_variants":
+            product = call(self.store, "get_product_details", {"product_id": args.get("product_id", "")})
+            return confirm.rank_variants(product, args.get("wanted_options") or {})
+        raise ToolError(f"Unknown tool {tool}")
 
     def _authenticate(self, session: Session, user_id: str) -> None:
         if session.user_id is not None and session.user_id != user_id:
@@ -266,6 +349,7 @@ class Gate:
             session.stats["approvals"] += 1
             if not session.auto_approve:
                 session.confirmation = False
+                session.confirmed = None
                 approval_id = self._request_approval(session, tool, args, amount)
                 self._audit(session, tool, "write", args, "pending_approval", f"{approval_id} ${amount}")
                 return {"ok": True, "pending_approval": True, "approval_id": approval_id,
@@ -273,6 +357,7 @@ class Gate:
                                 "supervisor must approve it. Tell the customer it is submitted and pending review."}
         result = self._execute_once(key, tool, args)
         session.confirmation = False  # one "yes" pays for one successful change
+        session.confirmed = None
         session.stats["writes"] += 1
         self._audit(session, tool, "write", args, "ok", f"${amount}")
         return {"ok": True, "result": result}

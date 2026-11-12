@@ -121,7 +121,7 @@ def run_episode(config: TextRunConfig, task: Any, trial: int, user_model: str) -
             "nl_ok": all(c["met"] for c in nl) if nl else None, "nl": nl,
             "termination": str(sim.termination_reason), "turns": sum(isinstance(m, UserMessage) for m in sim.messages),
             "arch": rep["arch"], "gate": rep["gate"], "gate_stats": rep["gate_stats"],
-            "tool_calls": [{"name": c["name"], "ran_in_tau2": c["ran_in_tau2"],
+            "tool_calls": [{"name": c["name"], "args": c["args"], "ran_in_tau2": c["ran_in_tau2"],
                             "blocked": c["result"].get("blocked_by_policy"), "ok": c["result"].get("ok")}
                            for c in rep["tool_calls"]],
             "routes": rep["routes"], "handoffs": rep["handoffs"], "agent_model": rep["model"],

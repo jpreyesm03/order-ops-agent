@@ -111,7 +111,7 @@ def test_gate_uses_the_shopify_store(mirror):
     s = Session("shop-1", approval_threshold=1e9)
     gate.run(s, "find_user_id_by_email", {"email": data["users"][data["orders"][oid]["user_id"]]["email"]})
     assert gate.run(s, "cancel_pending_order", {"order_id": oid, "reason": "no longer needed"})[
-        "blocked_by_policy"] == "confirmation"
+        "needs_confirmation"]
     assert shop.calls == []
     s.on_customer_message("yes, cancel it")
     assert gate.run(s, "cancel_pending_order", {"order_id": oid, "reason": "no longer needed"})["ok"]

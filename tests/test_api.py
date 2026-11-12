@@ -7,6 +7,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from helpers import confirmed_run
 from order_ops import api, db
 from order_ops.gate import Gate, Session
 
@@ -46,8 +47,8 @@ def test_approval_inbox_and_decision(client):
     gate = Gate(conn, api.LIVE)
     s = Session("ses_test_" + oid.strip("#"), approval_threshold=250)
     gate.run(s, "find_user_id_by_email", {"email": db.get_user(conn, api.LIVE, uid)["email"]})
-    s.on_customer_message("yes, cancel it")
-    out = gate.run(s, "cancel_pending_order", {"order_id": oid, "reason": "no longer needed"})
+    out = confirmed_run(gate, s, "cancel_pending_order", {"order_id": oid, "reason": "no longer needed"},
+                        "yes, cancel it")
     conn.close()
     aid = out["approval_id"]
     assert aid in [a["approval_id"] for a in client.get("/api/approvals").json()]

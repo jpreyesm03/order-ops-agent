@@ -6,6 +6,7 @@ import uuid
 
 import pytest
 
+from helpers import confirmed_run
 from order_ops import db
 from order_ops.evaluate import gold_state, load_tasks
 from order_ops.gate import Gate, Session, is_confirmation
@@ -98,7 +99,8 @@ def test_writes_need_identity_then_confirmation(conn, schema):
     email = db.get_user(conn, schema, uid)["email"]
     assert gate.run(s, "find_user_id_by_email", {"email": email})["result"] == uid
     out = gate.run(s, "cancel_pending_order", {"order_id": oid, "reason": "no longer needed"})
-    assert out["blocked_by_policy"] == "confirmation"
+    assert out["needs_confirmation"] and oid in out["summary"] and s.take_summary() == out["summary"]
+    assert db.get_order(conn, schema, oid)["status"] == "pending"  # nothing ran yet
     s.on_customer_message("Yes, cancel it.")
     assert gate.run(s, "cancel_pending_order", {"order_id": oid, "reason": "no longer needed"})["ok"]
 
@@ -124,10 +126,9 @@ def test_one_yes_pays_for_one_write(conn, schema):
     (o1, uid), (o2, _) = rows
     s = Session("s3", approval_threshold=1e9)
     gate.run(s, "find_user_id_by_email", {"email": db.get_user(conn, schema, uid)["email"]})
-    s.on_customer_message("yes")
-    assert gate.run(s, "cancel_pending_order", {"order_id": o1, "reason": "no longer needed"})["ok"]
-    assert gate.run(s, "cancel_pending_order", {"order_id": o2, "reason": "no longer needed"})[
-        "blocked_by_policy"] == "confirmation"
+    assert confirmed_run(gate, s, "cancel_pending_order", {"order_id": o1, "reason": "no longer needed"})["ok"]
+    out = gate.run(s, "cancel_pending_order", {"order_id": o2, "reason": "no longer needed"})
+    assert out["needs_confirmation"] and db.get_order(conn, schema, o2)["status"] == "pending"
 
 
 def test_cannot_refund_twice(conn, schema):
@@ -137,8 +138,7 @@ def test_cannot_refund_twice(conn, schema):
     s = Session("s4", approval_threshold=1e9)
     gate.run(s, "find_user_id_by_email", {"email": db.get_user(conn, schema, uid)["email"]})
     args = {"order_id": oid, "reason": "ordered by mistake"}
-    s.on_customer_message("yes please")
-    first = gate.run(s, "cancel_pending_order", args)
+    first = confirmed_run(gate, s, "cancel_pending_order", args, "yes please")
     s.on_customer_message("yes")
     second = gate.run(s, "cancel_pending_order", args)
     assert first["ok"] and second.get("duplicate")
@@ -154,8 +154,8 @@ def test_big_refund_waits_for_human_then_executes(conn, schema):
                                 ORDER BY o.order_id LIMIT 1""").fetchone()
     s = Session("s5", approval_threshold=250)
     gate.run(s, "find_user_id_by_email", {"email": db.get_user(conn, schema, uid)["email"]})
-    s.on_customer_message("Yes, cancel it")
-    out = gate.run(s, "cancel_pending_order", {"order_id": oid, "reason": "no longer needed"})
+    out = confirmed_run(gate, s, "cancel_pending_order", {"order_id": oid, "reason": "no longer needed"},
+                        "Yes, cancel it")
     assert out["pending_approval"]
     assert db.get_order(conn, schema, oid)["status"] == "pending"  # nothing happened yet
     decided = gate.decide(out["approval_id"], approve=True, reviewer="supervisor")

@@ -8,6 +8,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from helpers import confirmed_run
 from order_ops import tracing
 from order_ops.agent import Agent, finish_turn, traced_turn
 from order_ops.gate import Gate, Session
@@ -39,7 +40,8 @@ def test_conversation_is_one_trace_across_requests(env, spans):
     conn, schema, oid, email = env
     gate, s, history = Gate(conn, schema), Session("ses_t1"), []
     ids = tracing.start_conversation(s.session_id, **{"order_ops.channel": "web"})
-    client = FakeClient([tool("find_user_id_by_email", email=email), say("Confirm cancelling?"),
+    client = FakeClient([tool("find_user_id_by_email", email=email),
+                         tool("cancel_pending_order", order_id=oid, reason="no longer needed"), say("Confirm?"),
                          tool("cancel_pending_order", order_id=oid, reason="no longer needed"), say("Done.")])
     # two customer messages = two separate requests (a fresh Agent each time, as in the API)
     _turn(Agent(gate, client=client, model="claude-haiku-5-5"), s, history, f"cancel {oid}, I'm {email}", 1, ids)
@@ -51,7 +53,7 @@ def test_conversation_is_one_trace_across_requests(env, spans):
     turns = [x for x in got if x.name == "turn"]
     assert len(turns) == 2 and all(t.parent.span_id == root.context.span_id for t in turns)
     llm = [x for x in got if x.name == "llm"]
-    assert len(llm) == 4 and all(x.attributes["gen_ai.usage.input_tokens"] == 10 for x in llm)
+    assert len(llm) == 5 and all(x.attributes["gen_ai.usage.input_tokens"] == 10 for x in llm)
     assert all(x.attributes["order_ops.cost_usd"] > 0 for x in llm)
     tools = {x.attributes["tool.name"]: x for x in got if x.name == "tool"}
     write = tools["cancel_pending_order"]
@@ -63,12 +65,14 @@ def test_conversation_is_one_trace_across_requests(env, spans):
 def test_gate_block_is_on_the_span(env, spans):
     conn, schema, oid, email = env
     client = FakeClient([tool("find_user_id_by_email", email=email),
-                         tool("cancel_pending_order", order_id=oid, reason="no longer needed"), say("ok")])
-    Agent(Gate(conn, schema), client=client).respond(Session("ses_t2"), [], f"cancel {oid}, email {email}")
-    blocked = next(x for x in spans.get_finished_spans() if x.attributes.get("tool.name") == "cancel_pending_order")
+                         tool("modify_pending_order_address", order_id=oid, address1="1 Invented St", address2="",
+                              city="Nowhere", state="ZZ", country="USA", zip="00000"), say("ok")])
+    Agent(Gate(conn, schema), client=client).respond(Session("ses_t2"), [], f"change {oid}'s address, email {email}")
+    blocked = next(x for x in spans.get_finished_spans()
+                   if x.attributes.get("tool.name") == "modify_pending_order_address")
     assert blocked.attributes["order_ops.outcome"] == "blocked"
-    assert blocked.attributes["order_ops.gate.rule"] == "confirmation"
-    assert blocked.events[0].name == "gate.blocked" and "yes" in blocked.events[0].attributes["reason"]
+    assert blocked.attributes["order_ops.gate.rule"] == "provenance"
+    assert blocked.events[0].name == "gate.blocked" and "00000" in blocked.events[0].attributes["reason"]
 
 
 def test_no_customer_text_or_personal_data_in_spans(env, spans, monkeypatch):
@@ -134,8 +138,8 @@ def test_console_links_ticket_to_its_trace(spans, monkeypatch):
                                     ORDER BY random() LIMIT 1""").fetchone()
         gate, s = Gate(conn, api.LIVE), Session(sid, approval_threshold=250)
         gate.run(s, "find_user_id_by_email", {"email": db.get_user(conn, api.LIVE, uid)["email"]})
-        s.on_customer_message("yes, cancel it")
-        aid = gate.run(s, "cancel_pending_order", {"order_id": oid, "reason": "no longer needed"})["approval_id"]
+        aid = confirmed_run(gate, s, "cancel_pending_order", {"order_id": oid, "reason": "no longer needed"},
+                            "yes, cancel it")["approval_id"]
         conn.close()
         ticket = next(a for a in client.get("/api/approvals").json() if a["approval_id"] == aid)
         assert ticket["trace_url"] == f"https://traces.example/{ticket['trace_id']}"
