@@ -30,6 +30,9 @@ dev = [
     "pytest>=8.3",
     "ruff>=0.6",
 ]
+evals = [
+    "claude-agent-sdk>=0.2.180",
+]
 # The official tau2-bench harness (orchestrator, user simulator, evaluator), for evals only. Never in the API image.
 tau2 = ["tau2"]
 

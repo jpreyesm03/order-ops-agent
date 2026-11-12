@@ -32,7 +32,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from typing import Any
 from xml.sax.saxutils import quoteattr
 
-from .agent import Agent, Turn
+from .agent import Agent, Turn, make_agent
 from .gate import Session
 
 GREETING = "Hi, this is the store's support line. I can help with cancellations, returns, exchanges and order " \
@@ -80,7 +80,7 @@ def as_transcript(text: str) -> str:
 
 def voice_agent(gate: Any, client: Any) -> Agent:
     from .agent import system_prompt
-    return Agent(gate, client=client, system=system_prompt() + VOICE_RULES, name="voice")
+    return make_agent(gate, client=client, system=system_prompt() + VOICE_RULES, name="voice")
 
 
 def new_call(call_id: str, setup: dict, threshold: float) -> tuple[Session, list[dict], dict]:

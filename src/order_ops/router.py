@@ -18,7 +18,7 @@ import time
 import anthropic
 
 from . import db, tracing
-from .agent import PREAMBLE, Agent, Turn, Usage, record_llm
+from .agent import PREAMBLE, Turn, Usage, make_agent, record_llm
 from .gate import Gate, Session
 from .tool_specs import TOOLS_BY_NAME
 
@@ -115,8 +115,8 @@ class RoutedAgent:
         self.model = model or os.getenv("AGENT_MODEL", "claude-haiku-5-5")
         self.router_model = router_model or os.getenv("ROUTER_MODEL", "claude-haiku-5-5")
         self.agents = {
-            name: Agent(gate, model=self.model, client=self.client, system=specialist_prompt(name), name=name,
-                        tools=[TOOLS_BY_NAME[t] for t in READS + spec["writes"]] + [HANDOFF_TOOL])
+            name: make_agent(gate, client=self.client, model=self.model, system=specialist_prompt(name), name=name,
+                             tools=[TOOLS_BY_NAME[t] for t in READS + spec["writes"]] + [HANDOFF_TOOL])
             for name, spec in SPECIALISTS.items()
         }
         self.histories: dict[str, list[dict]] = {name: [] for name in SPECIALISTS}
@@ -137,6 +137,10 @@ class RoutedAgent:
 
     def cost(self) -> float:
         return self.router_usage.cost(self.router_model) + sum(a.usage.cost(a.model) for a in self.agents.values())
+
+    def close(self) -> None:
+        for a in self.agents.values():
+            a.close()
 
     def _route(self, text: str) -> str:
         return route(self.client, self.router_model, self.current, self.transcript, text, self.router_usage)

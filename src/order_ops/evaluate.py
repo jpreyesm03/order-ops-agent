@@ -22,15 +22,14 @@ import random
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from math import comb
 from typing import Any
 
 import anthropic
 from psycopg.types.json import Jsonb
 
-from . import db, tracing, voice
-from .agent import Agent, Usage, finish_turn, traced_turn
+from . import db, runlog, tracing, voice
+from .agent import Usage, finish_turn, make_agent, make_client, traced_turn
 from .gate import Gate, Session
 from .router import RoutedAgent
 from .simulator import TRANSFER, UserSimulator, scenario_text
@@ -140,6 +139,7 @@ def judge_nl(client: anthropic.Anthropic, transcript: str, assertions: list[str]
 def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: float,
                 arch: str = "single", gate_mode: str = "on", channel: str = "chat") -> dict[str, Any]:
     conn = db.connect()
+    agent = None
     schema = f"ep_{uuid.uuid4().hex[:10]}"
     started = time.perf_counter()
     try:
@@ -152,7 +152,7 @@ def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: 
         if channel == "voice":  # D26: voice prompt + spoken-consent rule; customer text as a speech transcript
             agent = voice.voice_agent(gate, client)
         else:
-            agent = RoutedAgent(gate, client=client) if arch == "routed" else Agent(gate, client=client)
+            agent = RoutedAgent(gate, client=client) if arch == "routed" else make_agent(gate, client=client)
         sim = UserSimulator(scenario_text(task), client=client)
         messages: list[dict] = []
         transcript = [f"assistant: {GREETING}"]
@@ -214,6 +214,8 @@ def run_episode(task: dict, trial: int, client: anthropic.Anthropic, threshold: 
         return {"task_id": task["id"], "trial": trial, "reward": 0.0, "error": f"{type(e).__name__}: {e}",
                 "wall_s": round(time.perf_counter() - started, 1)}
     finally:
+        if agent is not None:
+            agent.close()
         db.drop_schema(conn, schema)
         conn.close()
 
@@ -272,6 +274,14 @@ def _sum_dicts(ds: list[dict]) -> dict:
     return out
 
 
+def with_usage(row: dict, backend: str) -> dict:
+    """Plan usage (5-hour / weekly, 0-1) seen when the episode ended: lets a run measure % per episode."""
+    if backend == "subscription":
+        from .subscription import usage_now
+        row["plan_usage_after"] = usage_now()
+    return row
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--split", default="test", choices=["train", "test", "base", "all", "adversarial"])
@@ -284,6 +294,8 @@ def main() -> None:
     ap.add_argument("--channel", default="chat", choices=["chat", "voice"],
                     help="voice: the voice prompt, and customer messages turned into speech-to-text style (D26)")
     ap.add_argument("--threshold", type=float, default=float(os.getenv("APPROVAL_THRESHOLD_USD", "250")))
+    ap.add_argument("--backend", default=os.getenv("LLM_BACKEND", "api"), choices=["api", "subscription"],
+                    help="subscription: every model call on the Claude plan via the Agent SDK (D27), never the API")
     args = ap.parse_args()
 
     if args.channel == "voice" and args.arch == "routed":
@@ -299,36 +311,40 @@ def main() -> None:
     out_dir = RUNS_DIR / args.label
     out_dir.mkdir(parents=True, exist_ok=True)
     tracing.setup()
-    client = anthropic.Anthropic(max_retries=8)
+    # trials are not pinned: a 40x1 run can be extended to 40x4 under the same label (episodes keyed by task, trial)
+    config = {"split": args.split if not args.tasks else f"tasks:{args.tasks}",
+              "arch": args.arch, "gate": args.gate, "channel": args.channel,
+              "agent_model": os.getenv("AGENT_MODEL", "claude-haiku-5-5"),
+              "agent_effort": os.getenv("AGENT_EFFORT", "medium"), "approval_threshold": args.threshold,
+              "backend": args.backend}
+    runlog.pin_config(out_dir, config)
+    client = make_client(args.backend)
     jobs = [(t, i) for t in tasks for i in range(args.trials)]
     random.Random(0).shuffle(jobs)
-    results: list[dict] = []
-    t0, spent = time.perf_counter(), 0.0
-    with ThreadPoolExecutor(args.concurrency) as pool, open(out_dir / "results.jsonl", "w") as f:
-        futures = [pool.submit(run_episode, t, i, client, args.threshold, args.arch, args.gate, args.channel)
-                   for t, i in jobs]
-        for n, fut in enumerate(as_completed(futures), 1):
-            r = fut.result()
-            results.append(r)
-            f.write(json.dumps(r, default=str) + "\n")
-            f.flush()
-            mark = "ERR" if "error" in r else ("PASS" if r["reward"] else "fail")
-            if r.get("unauthorized_writes"):
-                mark += " UNAUTHORIZED-WRITE"
-            spent += r.get("cost_usd", 0.0)
-            eta = (time.perf_counter() - t0) / n * (len(jobs) - n)
-            print(f"[{n}/{len(jobs)}] task {r['task_id']} t{r['trial']} {mark}"
-                  + (f" {r['error']}" if "error" in r else f" db={r['db_match']} nl={r['nl_ok']} ${r['cost_usd']}")
-                  + f" · ${spent:.2f} so far · ETA {eta / 60:.0f} min", flush=True)
-    summary = summarize(results, args.trials) | {
-        "label": args.label, "split": args.split if not args.tasks else f"tasks:{args.tasks}",
-        "trials": args.trials, "arch": args.arch, "gate": args.gate, "channel": args.channel,
-        "agent_model": os.getenv("AGENT_MODEL", "claude-haiku-5-5"),
-        "agent_effort": os.getenv("AGENT_EFFORT", "medium"), "approval_threshold": args.threshold,
+
+    def describe(r: dict) -> str:
+        mark = "ERR" if "error" in r else ("PASS" if r["reward"] else "fail")
+        if r.get("unauthorized_writes"):
+            mark += " UNAUTHORIZED-WRITE"
+        return (f"task {r['task_id']} t{r['trial']} {mark}"
+                + (f" {r['error']}" if "error" in r else f" db={r['db_match']} nl={r['nl_ok']} ${r['cost_usd']}"))
+
+    results, stopped = runlog.run_jobs(
+        jobs, lambda j: (str(j[0]["id"]), j[1]),
+        lambda j: with_usage(run_episode(j[0], j[1], client, args.threshold, args.arch, args.gate, args.channel),
+                             args.backend),
+        out_dir, args.concurrency, describe)
+    summary = summarize(results, args.trials) | {"label": args.label, "trials": args.trials} | config | {
+        "stopped": stopped, "planned_episodes": len(jobs),
+        "complete": stopped is None and len(results) == len(jobs) and not any("error" in r for r in results),
     }
-    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    if args.backend == "subscription":
+        from .subscription import usage_now
+        summary["plan_usage_at_end"] = usage_now()  # 5-hour / weekly utilization (0-1) after the run
+    runlog.write_json(out_dir / "summary.json", summary)
     tracing.flush(10000)
     print(json.dumps(summary, indent=2))
+    runlog.finish(stopped, results, len(jobs), "order_ops.evaluate", args.label)
 
 
 if __name__ == "__main__":

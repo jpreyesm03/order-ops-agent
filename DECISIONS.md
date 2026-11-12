@@ -341,3 +341,33 @@ added under it as they come in.
   shows the chat → voice gap. Real calls log time to first audio per turn (p50/p95 from the sessions table).
 - **Limits:** replies aren't token-streamed yet (sentence chunks after the full turn); the filler hides tool time,
   not model time. The API Gateway setup (`scripts/voice_aws.sh`) is untested until a Twilio account exists.
+
+## D27. Evals run on a Claude plan through the Agent SDK; the API key only serves the deployed app
+- **Why:** scored evals use the Claude plan, not API credits. The deployed chat and voice keep the API path; a
+  small parity check at deploy time (about 5 tasks × 3 on both paths) measures any difference.
+- **How it works (`subscription.py`, `guard.py`, flag `--backend subscription` on `evaluate.py` and `tau2_run.py`):**
+  - The agent keeps its own loop. Each agent (or routed specialist) is one Agent SDK session per conversation, and
+    its tools are in-process MCP tools whose handlers run nothing: they pass the call to our code and wait for
+    the result. `_create` still returns one step at a time (one tool call or one reply), so `Agent.respond`, the
+    router, the policy gate and the τ² adapter are unchanged, and every tool call still goes through the gate
+    (or out to τ²).
+  - Calls without tools (simulated customer, judge, router) use a stand-in for the API client, one SDK query
+    each. τ²'s customer and judge reach it through a litellm provider, `claude-sub/<model>`.
+  - Guard on every session: isolated CLI configuration with its own login token, never an API key
+    (`apiKeySource` must be `none`), only the account-level hooks with their exact output (tool results stay
+    unchanged), stop at 80% of the 5-hour or weekly window and on any paid extra usage. Runs then stop cleanly
+    and keep the episodes already written.
+- **Known differences from the API path:** tool names show as `mcp__store__<name>`; parallel tool calls can't be
+  switched off (they run one at a time); customer and judge histories go in as one transcript; no temperature;
+  operator notices are a tagged line in the user message; one account-level sentence is added to each session.
+- **Measured (2 tasks on each harness, Haiku agent and customer, Sonnet judge):** about 1 min per episode
+  (CLI startup is about 7 s per single call). Six episodes plus smoke calls moved the 5-hour window from 42% to
+  43% and the weekly window not at all (it reports whole percents). API-equivalent cost is $0.005 to $0.013 per
+  episode.
+- **Stop-safe runs (`runlog.py`, both harnesses):** each finished episode is appended to `results.jsonl` with
+  flush + fsync. An episode cut off by a stop is never saved, so it can't be scored as a failure. A plan limit
+  stops the run (`QuotaStop`) whether it shows up as a rate-limit event, an error result or a CLI exception. The
+  stopped run exits with code 3 and prints the resume command. Rerunning the same command (same `--label`) skips
+  saved episodes and retries errored ones. `run_config.json` refuses a resume with other settings. Tested live:
+  `kill -9` after episode 1, then a resume with the limit forced (stopped mid-episode, still 1 saved, exit 3),
+  then a normal resume (ran only the 2 missing, `complete: true`). τ² with the limit forced: exit 3, nothing saved.

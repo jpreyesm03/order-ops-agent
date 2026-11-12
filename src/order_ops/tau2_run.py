@@ -22,12 +22,11 @@ import os
 import random
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from . import tau2_adapter  # noqa: F401  (sets TAU2_DATA_DIR before τ² loads anything)
-from . import db, tracing
-from .agent import PRICES
+from . import db, runlog, tracing
+from .agent import PRICES, make_client
 from .evaluate import pass_hat_k
 
 import anthropic  # noqa: E402
@@ -49,6 +48,7 @@ PLAN = [("single", "on", "base", 4), ("single", "off", "test", 4), ("routed", "o
 
 # ---------- Claude as τ²'s customer and judge ----------
 JUDGE_MODEL = ["claude-sonnet-5-5"]
+PREFIX = ["anthropic"]  # litellm provider for the customer and the judge: "anthropic" (API) or "claude-sub" (D27)
 _local = threading.local()  # judge usage of the current episode (each episode runs, and is judged, in one thread)
 _tau2_generate = nl_module.generate
 
@@ -56,7 +56,7 @@ _tau2_generate = nl_module.generate
 def _judge_generate(model: str = "", messages: Any = None, **kw: Any) -> Any:
     """τ²'s NL-assertion judge call, sent to Claude. Accepts a JSON answer wrapped in a code fence."""
     kw.pop("reasoning_effort", None)  # an OpenAI argument in τ²'s default judge settings
-    msg = _tau2_generate(model=f"anthropic/{JUDGE_MODEL[0]}", messages=messages, **kw)
+    msg = _tau2_generate(model=f"{PREFIX[0]}/{JUDGE_MODEL[0]}", messages=messages, **kw)
     text = (msg.content or "").strip()
     if text.startswith("```"):
         msg.content = text.strip("`").removeprefix("json").strip()
@@ -73,9 +73,9 @@ def use_claude_judge(model: str) -> None:
 
 def register_prices() -> None:
     """Teach litellm this repo's prices so τ²'s own cost fields aren't empty for these models."""
-    litellm.register_model({f"anthropic/{m}": {"input_cost_per_token": pin / 1e6, "output_cost_per_token": pout / 1e6,
-                                                "litellm_provider": "anthropic", "mode": "chat"}
-                            for m, (pin, pout) in PRICES.items()})
+    litellm.register_model({f"{p}/{m}": {"input_cost_per_token": pin / 1e6, "output_cost_per_token": pout / 1e6,
+                                         "litellm_provider": p, "mode": "chat"}
+                            for m, (pin, pout) in PRICES.items() for p in ("anthropic", "claude-sub")})
     litellm.drop_params = True
 
 
@@ -105,6 +105,7 @@ def register_agent(arch: str, gate: str, model: str, client: anthropic.Anthropic
 def run_episode(config: TextRunConfig, task: Any, trial: int, user_model: str) -> dict[str, Any]:
     started = time.perf_counter()
     _local.judge = []
+    orch = None
     try:
         orch = build_text_orchestrator(config, task, seed=SEED + trial)
         sim = run_simulation(orch, evaluation_type=EvaluationType.ALL)
@@ -135,6 +136,9 @@ def run_episode(config: TextRunConfig, task: Any, trial: int, user_model: str) -
     except Exception as e:  # noqa: BLE001 - one broken episode must not kill the run
         return {"task_id": task.id, "trial": trial, "reward": 0.0, "error": f"{type(e).__name__}: {e}",
                 "wall_s": round(time.perf_counter() - started, 1)}
+    finally:
+        if orch is not None:
+            orch.agent.close()
 
 
 # ---------- summary ----------
@@ -207,17 +211,23 @@ def main() -> None:
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--max-steps", type=int, default=200, help="τ²'s default")
     ap.add_argument("--label", default=time.strftime("tau2_%Y%m%d_%H%M"))
+    ap.add_argument("--backend", default=os.getenv("LLM_BACKEND", "api"), choices=["api", "subscription"],
+                    help="subscription: agent, customer and judge on the Claude plan via the Agent SDK (D27)")
     args = ap.parse_args()
 
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        raise SystemExit("ANTHROPIC_API_KEY is not set (add it to .env).")
+    if args.backend == "api" and not os.getenv("ANTHROPIC_API_KEY"):
+        raise SystemExit("ANTHROPIC_API_KEY is not set (add it to .env), or use --backend subscription.")
+    client = make_client(args.backend)
+    if args.backend == "subscription":
+        from .subscription import PROVIDER, register_litellm
+        register_litellm()
+        PREFIX[0] = PROVIDER
     register_prices()
     use_claude_judge(args.judge_model)
     tracing.setup()
-    client = anthropic.Anthropic(max_retries=8)
     name = register_agent(args.arch, args.gate, args.agent_model, client)
     config = TextRunConfig(domain="retail", agent=name, llm_agent=args.agent_model,
-                           llm_user=f"anthropic/{args.user_model}", llm_args_user=json.loads(args.user_args),
+                           llm_user=f"{PREFIX[0]}/{args.user_model}", llm_args_user=json.loads(args.user_args),
                            max_steps=args.max_steps, seed=SEED)
 
     if args.tasks:
@@ -233,33 +243,36 @@ def main() -> None:
     print(f"{len(jobs)} episodes · agent {args.agent_model} ({args.arch}, gate {args.gate}) · customer "
           f"{args.user_model} · judge {args.judge_model} → {out_dir}", flush=True)
 
-    results: list[dict] = []
-    started = time.perf_counter()
-    with ThreadPoolExecutor(args.concurrency) as pool, open(out_dir / "results.jsonl", "w") as f:
-        futures = [pool.submit(run_episode, config, t, i, args.user_model) for t, i in jobs]
-        for n, fut in enumerate(as_completed(futures), 1):
-            r = fut.result()
-            results.append(r)
-            f.write(json.dumps(r, default=str) + "\n")
-            f.flush()
-            elapsed = time.perf_counter() - started
-            eta = elapsed / n * (len(jobs) - n)
-            spent = sum(x.get("cost_usd", 0) for x in results)
-            mark = "ERR " + r["error"][:120] if "error" in r else ("PASS" if r["reward"] else "fail")
-            print(f"[{n}/{len(jobs)}] task {r['task_id']} t{r['trial']} {mark} · ${spent:.3f} so far · "
-                  f"ETA {eta / 60:.1f} min", flush=True)
+    run_config = {"tasks": ",".join(ids), "arch": args.arch, "gate": args.gate,
+                  "agent_model": args.agent_model, "user_model": args.user_model, "user_args": args.user_args,
+                  "judge_model": args.judge_model, "max_steps": args.max_steps, "backend": args.backend}
+    runlog.pin_config(out_dir, run_config)
+
+    def describe(r: dict) -> str:
+        mark = "ERR " + r["error"][:120] if "error" in r else ("PASS" if r["reward"] else "fail")
+        return f"task {r['task_id']} t{r['trial']} {mark}"
+
+    results, stopped = runlog.run_jobs(jobs, lambda j: (str(j[0].id), j[1]),
+                                       lambda j: run_episode(config, j[0], j[1], args.user_model),
+                                       out_dir, args.concurrency, describe)
 
     summary = summarize(results, args.trials) | {
         "label": args.label, "tasks": len(tasks), "trials": args.trials, "arch": args.arch, "gate": args.gate,
         "agent_model": args.agent_model, "user_model": args.user_model, "judge_model": args.judge_model,
         "tau2_commit": "989d3285ae669e49503324bdb9981bf14fccedeb", "configuration": "custom (D22)",
+        "backend": args.backend, "stopped": stopped, "planned_episodes": len(jobs),
+        "complete": stopped is None and len(results) == len(jobs) and not any("error" in r for r in results),
     }
+    if args.backend == "subscription":
+        from .subscription import usage_now
+        summary["plan_usage_at_end"] = usage_now()
     if args.sample and summary["episodes"] > summary["errors"]:
         summary["full_plan_estimate"] = plan_cost(summary["cost_per_episode_usd"]["total"])
         summary["full_plan_estimate_total_usd"] = round(sum(r["est_usd"] for r in summary["full_plan_estimate"]), 2)
-    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    runlog.write_json(out_dir / "summary.json", summary)
     tracing.flush(10000)
     print(json.dumps(summary, indent=2))
+    runlog.finish(stopped, results, len(jobs), "order_ops.tau2_run", args.label)
 
 
 if __name__ == "__main__":

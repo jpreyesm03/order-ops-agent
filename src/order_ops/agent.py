@@ -191,3 +191,24 @@ class Agent:
                                 "content": json.dumps(out, default=str), "is_error": not out.get("ok", False)})
             messages.append({"role": "user", "content": results})
         return Turn("I'm sorry, I couldn't finish that. Let me transfer you to a human agent.", calls, True)
+
+    def close(self) -> None:
+        """Release the model session (nothing to do on the API path)."""
+
+
+def make_client(backend: str = "api") -> Any:
+    """The model client: the API (deployed app), or a Claude plan through the Agent SDK (evals, D27)."""
+    if backend == "subscription":
+        from .subscription import SubscriptionClient
+        return SubscriptionClient()
+    if backend != "api":
+        raise ValueError(f"unknown backend {backend!r}")
+    return anthropic.Anthropic(max_retries=8)
+
+
+def make_agent(gate: Gate, client: Any = None, **kw: Any) -> Agent:
+    """An Agent on the client's backend: the API loop, or the same loop on an Agent SDK session (SdkAgent)."""
+    if getattr(client, "backend", "api") == "subscription":
+        from .subscription import SdkAgent
+        return SdkAgent(gate, **kw)
+    return Agent(gate, client=client, **kw)

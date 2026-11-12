@@ -58,7 +58,7 @@ from tau2.data_model.message import (  # noqa: E402
 )
 
 from . import tracing  # noqa: E402
-from .agent import MAX_STEPS, PREAMBLE, Agent, Usage  # noqa: E402
+from .agent import MAX_STEPS, PREAMBLE, Usage, make_agent  # noqa: E402
 from .gate import AUTH_TOOLS, Blocked, Gate, Session, record_outcome  # noqa: E402
 from .router import HANDOFF_TOOL, READS, SPECIALISTS, route, specialist_prompt  # noqa: E402
 from .store import ALL_TOOLS, WRITE_TOOLS, ToolError  # noqa: E402
@@ -191,13 +191,13 @@ class P5Tau2Agent(HalfDuplexAgent[dict]):
                                approval_threshold=THRESHOLD)
         policy = domain_policy + (f"\n\n{language_guidance}" if language_guidance else "")
         if arch == "single":
-            self.workers = {"agent": Agent(self.gate, model=model, effort=effort, tools=TOOLS,
-                                           system=PREAMBLE + policy, client=self.client, name="agent")}
+            self.workers = {"agent": make_agent(self.gate, model=model, effort=effort, tools=TOOLS,
+                                                system=PREAMBLE + policy, client=self.client, name="agent")}
             self.current = "agent"
         else:
-            self.workers = {name: Agent(self.gate, model=model, effort=effort, client=self.client, name=name,
-                                        system=specialist_prompt(name, policy),
-                                        tools=[TOOLS_BY_NAME[t] for t in READS + spec["writes"]] + [HANDOFF_TOOL])
+            self.workers = {name: make_agent(self.gate, model=model, effort=effort, client=self.client, name=name,
+                                             system=specialist_prompt(name, policy),
+                                             tools=[TOOLS_BY_NAME[t] for t in READS + spec["writes"]] + [HANDOFF_TOOL])
                             for name, spec in SPECIALISTS.items()}
             self.current = "orders"
         self.router_model = router_model or os.getenv("ROUTER_MODEL", "claude-haiku-5-5")
@@ -315,6 +315,10 @@ class P5Tau2Agent(HalfDuplexAgent[dict]):
 
     def cost(self) -> float:
         return self.router_usage.cost(self.router_model) + sum(w.usage.cost(w.model) for w in self.workers.values())
+
+    def close(self) -> None:
+        for w in self.workers.values():
+            w.close()
 
     def report(self) -> dict[str, Any]:
         return {"arch": self.arch, "gate": self.gate_mode, "gate_stats": self.session.stats,
