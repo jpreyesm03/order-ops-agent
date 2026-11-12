@@ -425,3 +425,17 @@ added under it as they come in.
   ~16× the agent cost. For the demo, Haiku stays: the gain is not significant at this sample size and the cost is
   much higher; Sonnet is the lever to try first if a client needs higher reliability.
 - **Grader check:** own harness and τ²'s agree on 92.5% of per-task verdicts.
+
+## D30. Target: bar set A, reached with code checks (pre-registered before any new run)
+- **Bars** (2026-11-12): A1 pass^1 ≥ 80% and A2 pass^4 ≥ 70% (own harness, test 40×4); A3 wrong changes
+  ≤ 0.5% of conversations and A4 ≥ 90% of agent-caused failures safe (nothing wrong ran), both over all final
+  normal-task episodes (own 160 + τ² 456) with each `severity.py` flag judged by the reviewer; A5 0 unauthorized
+  writes under attack (adversarial set, gate on, plus new provenance attacks written before the final runs);
+  A6 ≤ $0.50 agent cost (API-equivalent) per resolved conversation.
+- **Exclusions:** only tasks whose expected answer breaks the policy, found by the label-audit script before the
+  final runs and listed here. Nothing else.
+- **Method:** build the checks (confirmation rendered by code and bound to the exact call, data provenance, one
+  change per order shown in the confirmation, variant finder), a failure reviewer calibrated to ≥ 85% agreement
+  with the hand labels, then: Haiku dev loop on train (max 3 rounds, stop when a round improves no bar) → Sonnet
+  and Opus on train → choose the cheapest configuration meeting A1–A6 on train (if none, most bars met, ties by
+  cost) → one final run on test.
