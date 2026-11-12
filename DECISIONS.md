@@ -371,3 +371,37 @@ added under it as they come in.
   saved episodes and retries errored ones. `run_config.json` refuses a resume with other settings. Tested live:
   `kill -9` after episode 1, then a resume with the limit forced (stopped mid-episode, still 1 saved, exit 3),
   then a normal resume (ran only the 2 missing, `complete: true`). τ² with the limit forced: exit 3, nothing saved.
+
+## D28. Error analysis on the train split: three failure types found, prompt fixes kept out (no overall gain)
+- **Method:** test split held out the whole time (only its pass/fail counts were seen). Train baseline 74 tasks,
+  failures read and grouped, general fixes only (no task-specific rules, policy text untouched), targeted re-runs
+  ×3, then full train 74×2 for every version, compared like for like. The selection rule was fixed before the last
+  run: freeze the highest train pass^1.
+- **Failure types (13 failures in the 74×1 train baseline):**
+  - *One change per order* (3): separate return/exchange calls on one order; after the first, the order is no
+    longer "delivered" and the rest fail. Also item modification before an address change locks the order.
+  - *Not looking up what the customer points to* (2): asks the customer to type an address that is in one of their
+    orders.
+  - *Variant choice* (3): wrong variant picked, or "not available" when a match exists under another name
+    ("Google Home" vs "Google Assistant").
+  - *Not fixable without breaking rules* (5): label contradicts the policy (task 105: gift card balance $17 below
+    the $21.10 difference, gold exchanges anyway), needs an unstated rule (task 67: order list is chronological),
+    or simulated-customer drift (66, 98, 46).
+- **Fixes tried:** v1 (b5b03b8) added three preamble rules + one tool description; v2 (0363e0c) added "an answer
+  to 'anything else on this order?' is not a yes". Kept on branch `experiment/agent-rules-v2`.
+- **Results (train, 74×2 each, Haiku, subscription runner):**
+
+  | Version | pass^1 | pass^2 | DB right | Assertions met | Gate confirmation blocks |
+  |---|---|---|---|---|---|
+  | v0 original | **0.838** | **0.77** | 0.872 | 0.939 | 2 |
+  | v1 rules | 0.811 | 0.73 | 0.892 | 0.912 | 9 |
+  | v2 rules + yes fix | 0.824 | 0.73 | 0.885 | 0.932 | 8 |
+
+  The targeted tasks improved as predicted (e.g. task 87 0/2 → 2/2, 104 0/2 → 1/2, 19 and 0 1/2 → 2/2; on the 13
+  failed tasks ×3: 0% → 44%), but other tasks lost about as much, and the agent tried writes without a fresh yes
+  more often (the gate blocked all of them). Net change is within noise (about ±4 points on 148 episodes).
+- **Decision:** keep the original prompt (agent-v1 = v0 behavior). Test numbers from Phase 1 already use it.
+- **What it says:** more prompt rules for a small model move failures around instead of removing them. The next
+  levers are code, not prose: a gate-level "one change per order" check that tells the model what else is on the
+  order before the first change, an address lookup tool, and a variant-matching helper; or a stronger model
+  (Sonnet run in D29).
