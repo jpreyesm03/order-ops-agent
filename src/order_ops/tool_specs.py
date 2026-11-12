@@ -72,7 +72,8 @@ TOOLS: list[dict] = [
           {"user_id": {"type": "string"}, **_ADDRESS}, ["user_id", *_ADDR_KEYS]),
     _tool("return_delivered_order_items",
           "Return items of a delivered order. Refund goes to the original payment method or an existing gift card. "
-          "Status becomes 'return requested'. Get explicit confirmation first.",
+          "Status becomes 'return requested', so it can only be done once per order: put every item to return from "
+          "this order in one call. Get explicit confirmation first.",
           {"order_id": _ORDER_ID,
            "item_ids": {**_ITEM_LIST, "description": "Item ids to return (duplicates allowed)."},
            "payment_method_id": _PM_ID}),

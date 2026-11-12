@@ -24,6 +24,8 @@ from pathlib import Path
 HOME = Path(os.environ.get("CLAUDE_EVAL_HOME", Path.home() / ".config" / "claude-eval"))
 TOKEN, CONFIG = HOME / "oauth_token", HOME / "config"
 STOP_AT = float(os.environ.get("CLAUDE_EVAL_STOP_AT", "0.80"))
+# Optional tighter cap for the weekly window only (e.g. 0.55 to leave room for other projects this week).
+STOP_AT_WEEKLY = float(os.environ.get("CLAUDE_EVAL_STOP_AT_WEEKLY", str(STOP_AT)))
 REMOVE = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
           "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR")
 
@@ -80,9 +82,15 @@ def utilization(w: dict | None = None) -> float:
                default=0.0)
 
 
+def limit_for(window: str) -> float:
+    return STOP_AT_WEEKLY if window.startswith("seven_day") else STOP_AT
+
+
 def before_run() -> None:
-    if utilization(last_windows) >= STOP_AT:
-        raise QuotaStop(f"usage at {utilization(last_windows):.0%} (stop at {STOP_AT:.0%}): {last_windows}")
+    for name, w in (last_windows or {}).items():
+        used = w.get("utilization") or 0.0
+        if used >= limit_for(name):
+            raise QuotaStop(f"{name} usage at {used:.0%} (stop at {limit_for(name):.0%}): {last_windows}")
 
 
 def check(msg) -> None:  # noqa: ANN001 - any Agent SDK message

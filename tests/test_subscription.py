@@ -154,3 +154,12 @@ def test_env_never_carries_an_api_key(monkeypatch, tmp_path):
     with pytest.raises(guard.NotClean):
         guard.sdk_env()
     assert subscription.PROVIDER == "claude-sub"
+
+
+def test_weekly_cap_is_separate(monkeypatch):
+    monkeypatch.setattr(guard, "STOP_AT_WEEKLY", 0.55)
+    monkeypatch.setattr(guard, "last_windows", {"five_hour": {"utilization": 0.30}, "seven_day": {"utilization": 0.54}})
+    guard.before_run()
+    monkeypatch.setattr(guard, "last_windows", {"five_hour": {"utilization": 0.30}, "seven_day": {"utilization": 0.55}})
+    with pytest.raises(guard.QuotaStop):
+        guard.before_run()
