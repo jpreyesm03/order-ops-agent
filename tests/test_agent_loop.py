@@ -70,7 +70,7 @@ def test_agent_cancels_after_yes(env):
     assert first.reply.startswith("Shall I cancel it?") and oid in first.reply  # code-rendered summary shown
     assert db.get_order(conn, schema, oid)["status"] == "pending"
     turn = agent.respond(s, history, "yes please")
-    assert turn.reply == "Done." and turn.tool_calls[0]["result"]["ok"]
+    assert turn.reply == f"Done.\n\nDone: Order {oid} is cancelled." and turn.tool_calls[0]["result"]["ok"]
     assert db.get_order(conn, schema, oid)["status"] == "cancelled"
     # tool results go back as tool_result blocks with the matching id
     assert history[-2]["content"][0]["type"] == "tool_result"

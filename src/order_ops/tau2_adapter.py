@@ -200,6 +200,7 @@ class Tau2Gate(Gate):
             session.confirmation = False  # one "yes" pays for one successful change
             session.confirmed = None
             session.stats["writes"] += 1
+            session.note_done(tool, args)
         return {"ok": True, "result": result}
 
 

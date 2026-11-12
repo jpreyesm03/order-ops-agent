@@ -65,6 +65,7 @@ class Session:
     pending: dict | None = None           # proposal shown to the customer: {"tool", "fp", "summary"}
     confirmed: str | None = None          # fingerprint of the proposal the customer said yes to
     new_summary: str | None = None        # summary created in this turn, still to be shown to the customer
+    new_done: list = field(default_factory=list)  # "Done: ..." lines for changes that ran this turn
     seen: str = ""                        # customer messages + tool results of this conversation (provenance)
 
     def on_customer_message(self, text: str) -> None:
@@ -80,10 +81,14 @@ class Session:
     def remember(self, text: str) -> None:
         self.seen = (self.seen + "\n" + str(text))[-SEEN_LIMIT:]
 
+    def note_done(self, tool: str, args: dict, pending_approval: bool = False) -> None:
+        self.new_done.append(confirm.done(tool, args, pending_approval))
+
     def take_summary(self) -> str | None:
-        """The confirmation summary created in this turn (once), for the harness to show the customer."""
-        s, self.new_summary = self.new_summary, None
-        return s
+        """What code adds to this turn's reply (once): "Done" lines for changes that ran, then the new summary."""
+        parts = [*self.new_done, *([self.new_summary] if self.new_summary else [])]
+        self.new_done, self.new_summary = [], None
+        return "\n\n".join(parts) or None
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -352,6 +357,7 @@ class Gate:
                 session.confirmed = None
                 approval_id = self._request_approval(session, tool, args, amount)
                 self._audit(session, tool, "write", args, "pending_approval", f"{approval_id} ${amount}")
+                session.note_done(tool, args, pending_approval=True)
                 return {"ok": True, "pending_approval": True, "approval_id": approval_id,
                         "note": f"${amount} is above the ${session.approval_threshold:.0f} limit, so a human "
                                 "supervisor must approve it. Tell the customer it is submitted and pending review."}
@@ -359,6 +365,7 @@ class Gate:
         session.confirmation = False  # one "yes" pays for one successful change
         session.confirmed = None
         session.stats["writes"] += 1
+        session.note_done(tool, args)
         self._audit(session, tool, "write", args, "ok", f"${amount}")
         return {"ok": True, "result": result}
 

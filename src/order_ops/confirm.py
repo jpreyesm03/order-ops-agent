@@ -32,6 +32,25 @@ ACTION = {
     "modify_pending_order_payment": "Change the payment method of order",
     "modify_user_address": "Change the default address of account",
 }
+DONE = {
+    "cancel_pending_order": "Order {t} is cancelled.",
+    "exchange_delivered_order_items": "Exchange requested on order {t}.",
+    "return_delivered_order_items": "Return requested on order {t}.",
+    "modify_pending_order_items": "Items changed on order {t}.",
+    "modify_pending_order_address": "Shipping address of order {t} changed.",
+    "modify_pending_order_payment": "Payment method of order {t} changed.",
+    "modify_user_address": "Default address of account {t} changed.",
+}
+
+
+def done(tool: str, args: dict[str, Any], pending_approval: bool = False) -> str:
+    """One line, rendered by code, telling the customer that a confirmed change ran."""
+    target = args.get("order_id") or args.get("user_id")
+    if pending_approval:
+        return f"Submitted for supervisor approval: {ACTION.get(tool, tool).lower()} {target}."
+    return "Done: " + DONE.get(tool, tool + " {t}.").format(t=target)
+
+
 _ABBR = {"street": "st", "avenue": "ave", "drive": "dr", "road": "rd", "boulevard": "blvd", "lane": "ln",
          "suite": "ste", "apartment": "apt", "court": "ct", "place": "pl", "north": "n", "south": "s",
          "east": "e", "west": "w", "united states": "usa", "us": "usa"}

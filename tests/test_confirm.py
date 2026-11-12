@@ -56,3 +56,19 @@ def test_rank_variants_lists_every_option_value():
     out = confirm.rank_variants(product, {"compatibility": "Google Home", "color": "black"})
     assert out["option_values"]["compatibility"] == ["Amazon Alexa", "Apple HomeKit", "Google Assistant"]
     assert out["best_matches"][0]["matches"] == 1 and "compatibility" in out["best_matches"][0]["differs_on"]
+
+
+def test_done_line_names_the_change_and_the_target():
+    assert confirm.done("modify_user_address", {"user_id": "u1"}) == "Done: Default address of account u1 changed."
+    assert confirm.done("return_delivered_order_items", {"order_id": "#W1"}).startswith("Done: Return requested")
+    assert confirm.done("cancel_pending_order", {"order_id": "#W1"}, pending_approval=True).startswith(
+        "Submitted for supervisor approval")
+
+
+def test_session_hands_out_done_lines_then_summary_once():
+    from order_ops.gate import Session
+    s = Session(session_id="x")
+    s.note_done("modify_user_address", {"user_id": "u1"})
+    s.new_summary = "Please confirm this change."
+    assert s.take_summary() == "Done: Default address of account u1 changed.\n\nPlease confirm this change."
+    assert s.take_summary() is None
