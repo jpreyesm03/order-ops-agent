@@ -130,7 +130,9 @@ def take_turn(agent: Agent, session: Session, messages: list[dict], extra: dict,
             filler_s = time.perf_counter() - started
             turn = fut.result()
     reply_s = time.perf_counter() - started
-    chunks = speakable_chunks(turn.reply) or ["Sorry, could you say that again? "]
+    # the written "Done: ..." record line repeats what the agent just said; on a call it isn't read out
+    spoken = "\n".join(line for line in turn.reply.split("\n") if not line.startswith("Done: "))
+    chunks = speakable_chunks(spoken) or ["Sorry, could you say that again? "]
     for i, chunk in enumerate(chunks):
         send({"type": "text", "token": chunk, "last": i == len(chunks) - 1})
     events = [{"tool": c["name"], "ok": c["result"].get("ok", False), "blocked": c["result"].get("blocked_by_policy"),

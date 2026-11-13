@@ -122,7 +122,7 @@ def test_call_hedged_yes_is_not_consent(client, monkeypatch):
         conn = db.connect()
         assert db.get_order(conn, api.LIVE, oid)["status"] == "pending"
         ws.send_json({"type": "prompt", "voicePrompt": "Yes, cancel it.", "last": True})
-        assert "".join(m["token"] for m in _reply(ws)[1:]).startswith("Done. Your order is cancelled. Done: Order ")
+        assert "".join(m["token"] for m in _reply(ws)[1:]) == "Done. Your order is cancelled. "
         assert db.get_order(conn, api.LIVE, oid)["status"] == "cancelled"
         ws.send_json({"type": "interrupt", "utteranceUntilInterrupt": "Done.", "durationUntilInterruptMs": 300})
         ws.send_json({"type": "prompt", "voicePrompt": "", "last": True})  # empty transcript: ignored

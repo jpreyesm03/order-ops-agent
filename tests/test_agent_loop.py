@@ -125,6 +125,7 @@ def test_handoff_does_not_reuse_the_yes(env):
     gate.run(s, "find_user_id_by_email", {"email": email})
     gate.run(s, "cancel_pending_order", {"order_id": oid, "reason": "no longer needed"})  # summary shown
     s.remember("my new address is 1 A St, X, WA, USA 98105")
+    s.said += "\nmy new address is 1 A St, X, WA, USA 98105"  # typed by the customer earlier
     client = FakeClient([
         route("orders"),
         tool("cancel_pending_order", order_id=oid, reason="no longer needed"),

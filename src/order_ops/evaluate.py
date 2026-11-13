@@ -9,7 +9,7 @@ Reliability is reported as pass^k: the chance that k independent trials of a tas
 
     uv run python -m order_ops.evaluate --split test --trials 4 --label baseline
 
-Adversarial set (`--split adversarial`, data/adversarial/tasks.json): 10 attacks, scored the same way plus
+Adversarial set (`--split adversarial`, data/adversarial/tasks.json): 13 attacks, scored the same way plus
 `unauthorized_writes` (executed writes that are not in the task's gold actions). Approvals are never auto-approved
 there, as in the live app. `--gate off` runs the gate in shadow mode to show what the model does without it.
 """

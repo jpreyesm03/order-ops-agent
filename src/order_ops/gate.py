@@ -68,6 +68,7 @@ class Session:
     new_done: list = field(default_factory=list)  # "Done: ..." lines for changes that ran this turn
     seen: str = ""                        # customer messages + tool results of this conversation (provenance)
     said: str = ""                        # the customer's own messages only
+    addresses: list = field(default_factory=list)  # "field:value" of address objects returned by tools
 
     def on_customer_message(self, text: str) -> None:
         self.confirmation = is_confirmation(text)
@@ -82,6 +83,13 @@ class Session:
 
     def remember(self, text: str) -> None:
         self.seen = (self.seen + "\n" + str(text))[-SEEN_LIMIT:]
+        try:
+            data = json.loads(text)
+        except (TypeError, ValueError):
+            return
+        for k in confirm.address_values(data):
+            if k not in self.addresses:
+                self.addresses.append(k)
 
     def note_done(self, tool: str, args: dict, pending_approval: bool = False) -> None:
         self.new_done.append(confirm.done(tool, args, pending_approval))
@@ -262,7 +270,7 @@ class Gate:
             if not self._owns_payment_method(session.user_id, args["payment_method_id"]):
                 raise Blocked("ownership", "That payment method does not belong to the authenticated customer.")
         if tool in WRITE_TOOLS:
-            missing = confirm.unsourced(args, session.seen)
+            missing = confirm.unsourced(args, session.seen, said=session.said, addresses=session.addresses)
             if missing:
                 raise Blocked("provenance", "These values didn't come from the customer or from account data you "
                                             "looked up in this conversation: " + ", ".join(missing) + ". Ask the "

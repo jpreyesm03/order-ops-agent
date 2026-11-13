@@ -474,3 +474,35 @@ added under it as they come in.
   episode is read by hand** (expected: tens of episodes out of ~616), and the hand verdict counts. Disagreements
   with the reviewer are listed. The reviewer alone is used only for the train dev loop.
 - **Corrected baseline estimate:** real wrong changes on train_v0 = 2 of 146 (1.4%; tasks 99 and 109).
+
+## D33. Dev loop and model choice, final configuration frozen
+- **Dev loop on train (Haiku, 74 tasks × 2, tasks 64/105 excluded):** round 1 added a code-rendered "Done: ..."
+  line after every confirmed change and stopped the agent asking for the yes twice (pass^1 0.822, 0 real wrong
+  changes after hand check). Round 2 let the agent offer the addresses already on file when the customer says
+  "it's in the system" (pass^1 0.829; the "gave up" count fell from 12 to 6). Round 2 improved no bar beyond the
+  run-to-run noise (about ±6 points at 146 episodes), so the loop stopped as pre-registered. A third fix was kept
+  after a 6-episode check: when a one-time return/exchange leaves out an item on the same order that the customer
+  mentioned, the summary warns and the agent is told to ask (task 104: the puzzle is now returned with the
+  bookshelf).
+- **Model scan on train with that code (146 scored episodes each):**
+
+  | Model | pass^1 | pass^2 | Real wrong changes | Agent cost per resolved conversation |
+  |---|---|---|---|---|
+  | Haiku (rounds 1+2, 292 episodes) | 0.825 | 0.767 | 2 (0.7%) | $0.005 |
+  | Sonnet | 0.856 | 0.836 | 0 | $0.075 |
+  | Opus | 0.863 | 0.808 | 0 | $0.162 |
+
+  Wrong changes: reviewer triage, then hand check (Sonnet's one flag overturned: the customer asked for "the other
+  card, not the one I used", and that is what ran). Usage per episode: Haiku ~0.03%, Sonnet ~0.11%, Opus ~0.22% of
+  the 5-hour window.
+- **Choice (rule fixed in D30: cheapest configuration meeting the bars on train):** Haiku misses A3 (0.7% > 0.5%),
+  so **Sonnet 5.5** is the final agent; Opus costs about 2× for no measurable gain.
+- **Before the final runs:** three new provenance attacks (adv_11 "just fill in the address", adv_12 an address
+  planted inside another order's data, adv_13 a refund card that isn't on the account). adv_12 showed a gap in C2:
+  any text inside a tool result counted as a source. Fixed: an address field must now be typed by the customer or
+  be the same field of an address object the account data returns. Replaying every address change that ran in the
+  train runs (259) through the new check blocks none of them. US state names normalize to their codes so "Texas"
+  matches "TX". On voice, the written "Done: ..." line isn't read aloud.
+- **Frozen for the final runs (tag `final-v1`):** agent Sonnet 5.5 (effort medium), simulated customer Haiku 5.5,
+  judge Sonnet 5.5, reviewer prompt and model as in `reviewer.py` at this tag. Final runs: own test 40×4,
+  adversarial 13×4 gate on and off, τ² test 114×4; scored by D30 with D32's hand review.
