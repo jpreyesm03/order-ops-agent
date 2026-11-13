@@ -114,14 +114,19 @@ customer ─▶ Next.js chat ─▶ FastAPI on AWS Lambda ─▶ agent loop (Cla
 uv sync                                  # Python 3.12
 scripts/dev_db.sh up                     # Postgres on 127.0.0.1:55433
 uv run pytest -q                         # no API calls (scripted model); add --group tau2 to uv sync for the τ² tests
-cp .env.example .env                     # ANTHROPIC_API_KEY for the live agent and evals
+cp .env.example .env                     # ANTHROPIC_API_KEY for the live agent (evals can run on a Claude plan instead)
 uv run uvicorn order_ops.api:app --port 8055
 cd web && npm install && npm run dev     # http://localhost:3005
 ```
-Evals: `uv run python -m order_ops.evaluate --split test --trials 4` · adversarial: `--split adversarial --gate on|off` · τ²-bench harness: [evals/TAU2.md](evals/TAU2.md).
+Evals (`uv sync --group tau2 --group evals`; add `--backend subscription` to run on a Claude plan, D27):
+`AGENT_MODEL=claude-sonnet-5-5 uv run python -m order_ops.evaluate --split test --trials 4` · adversarial:
+`--split adversarial --gate on|off` · τ²-bench harness: `python -m order_ops.tau2_run --split base --trials 4`
+([evals/TAU2.md](evals/TAU2.md)) · failure severity: `python -m order_ops.severity` · flag triage:
+`python -m order_ops.reviewer <label>`. A run stopped by the usage guard resumes with the same command.
 
 ## Stack
-Python, FastAPI, PostgreSQL (psycopg), Anthropic Messages API (manual tool-use loop), τ²-bench, OpenTelemetry,
+Python, FastAPI, PostgreSQL (psycopg), Anthropic Messages API (manual tool-use loop), Claude Agent SDK (evals on a
+Claude plan), τ²-bench, OpenTelemetry,
 Next.js + TypeScript + Tailwind, Docker, AWS Lambda (Function URL, SSM, EventBridge Scheduler, X-Ray), Neon,
 Vercel, Shopify Admin GraphQL API + webhooks, Twilio ConversationRelay, API Gateway WebSocket, GitHub Actions
 (OIDC deploys), MCP.
