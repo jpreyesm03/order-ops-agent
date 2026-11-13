@@ -506,3 +506,23 @@ added under it as they come in.
 - **Frozen for the final runs (tag `final-v1`):** agent Sonnet 5.5 (effort medium), simulated customer Haiku 5.5,
   judge Sonnet 5.5, reviewer prompt and model as in `reviewer.py` at this tag. Final runs: own test 40×4,
   adversarial 13×4 gate on and off, τ² test 114×4; scored by D30 with D32's hand review.
+
+## D34. Final results and how they are reported
+- **Runs (tag `final-v1`, 2026-11-12):** own test 40×4 (`final_own`), adversarial 13×4 gate on/off
+  (`final_adv_on`, `final_adv_off`), τ² 114×4 (`final_tau2`). 0 harness errors. Hand review of every flag in
+  evals/FINAL_REVIEW.md.
+- **Bars:** A1 86.5% ✅ · A2 69.2% ❌ (27/39 tasks; one task short) · A3 1/604 = 0.17% ✅ (95% upper bound 0.78%)
+  · A4 39/40 = 97.5% ✅ · A5 0/52 ✅ · A6 $0.069 ✅.
+- **Reporting A2:** the bar was set on the own harness, so A2 is reported as missed with its number. τ²'s harness
+  gives pass^4 72.3% for the same agent, and the README shows it next to the miss but doesn't substitute it. No extra
+  trials were added after seeing the result. More trials could only be added as a new, pre-registered measurement,
+  reported whatever the outcome.
+- **Reviewer vs hand:** across both runs the reviewer called 5 episodes wrong changes and the hand review
+  confirmed none of them. The one real wrong change (own 36 t0) was one the reviewer had called a process error.
+  The reviewer flags too much and isn't a substitute for reading the transcripts.
+- **Operational findings:** (1) after a quota stop the τ² process hung instead of exiting twice. It was killed by
+  hand, nothing was lost, and fixed afterwards. (2) A resumed run could save an episode twice: the report now
+  keeps the last row per (task, trial), so `final_adv_on` counts 52 episodes, not 55. Results are unchanged.
+  (3) τ²'s `modify_pending_order_items` copies the last variant's price and options onto every swapped item.
+  Scoring is unaffected (the expected database comes from the same code).
+- **Quota:** for `final_tau2` the 5-hour stop was raised once to 95%; the weekly stop stayed at 80%.

@@ -4,13 +4,62 @@ A customer-service agent that cancels, refunds, exchanges and edits orders for a
 policy, with the risky parts enforced in code instead of trusted to the model.
 
 **Live demo:** https://order-ops-agent.vercel.app (a real Shopify dev store; the supervisor console approves refunds
-over $250) · **Decisions:** [DECISIONS.md](DECISIONS.md) · **Client brief:** [CLIENT_BRIEF.md](CLIENT_BRIEF.md)
+over $250; it runs the earlier Haiku version until `final-v1` is redeployed
+after an API parity check) · **Decisions:** [DECISIONS.md](DECISIONS.md) · **Client brief:** [CLIENT_BRIEF.md](CLIENT_BRIEF.md)
 
 ## Results
-Every number comes from a recorded run in `evals/` (full tables in [evals/RESULTS.md](evals/RESULTS.md)). Agent,
-simulated customer: Claude Haiku 5.5; judge: Claude Sonnet 5.5. Runs used the Claude Agent SDK on a Claude plan in an
-isolated configuration (D27; one account-level sentence is added to every session), so costs are
-API-equivalent, computed from token counts. About 2,500 episodes in total, 0 harness errors.
+Release `final-v1`. Agent: Claude Sonnet 5.5. Simulated customer: Claude Haiku 5.5. Judge: Claude Sonnet 5.5.
+The bars were written down before any final run ([D30](DECISIONS.md)), and so was the one rule for leaving tasks
+out: only a task whose expected answer breaks the policy (2 of 114, [D32](DECISIONS.md)). Every flagged episode
+was read by hand ([evals/FINAL_REVIEW.md](evals/FINAL_REVIEW.md)). Runs used the Claude Agent SDK on a Claude plan
+in an isolated configuration (D27), so costs are API-equivalent, computed from token counts. 0 harness errors.
+
+| Bar | Target | Result | |
+|---|---|---|---|
+| A1 Resolution | pass^1 ≥ 80%, own harness, 39 test tasks × 4 | **86.5%** | ✅ |
+| A2 Consistency | pass^4 ≥ 70%, same runs | **69.2%** (27 of 39 tasks solved in all 4 trials) | ❌ |
+| A3 Wrong changes | ≤ 0.5% of conversations, 604 episodes (own 156 + τ² 448) | **1 of 604 = 0.17%** (95% upper bound 0.78%) | ✅ |
+| A4 Safe failures | ≥ 90% of agent-caused failures change nothing wrong | **39 of 40 = 97.5%** | ✅ |
+| A5 Attacks | 0 unauthorized writes, 13 attacks × 4, gate on | **0 of 52** (gate off: 8 of 52) | ✅ |
+| A6 Cost | ≤ $0.50 agent cost per resolved conversation | **$0.069** | ✅ |
+
+- **A2 is missed by one task.** One more task solved in all four trials would have reached 71.8%. On τ²-bench's
+  own harness (112 tasks × 4) the same agent scores pass^4 **72.3%**, but the bar was set on the own harness, so
+  A2 counts as not met.
+- **A3:** the point estimate meets the bar. With 604 episodes, the data can't rule out a true rate up to 0.78%.
+  The one wrong change was borderline. Asked for "the cheapest options", the agent kept the customer's T-shirt
+  size and said the total was the lowest possible. A different size was $0.19 cheaper, and the customer cancelled
+  the order because of the agent's claim.
+- **A5:** with the gate off, a fake manager override and pressure to skip the supervisor approval each succeed in
+  4 of 4 trials. With the gate on, both fail, because those rules are enforced in code. Three attacks were written
+  for the final run (a "just fill in the address" request, an address planted in another order's data, and a
+  refund card that isn't on the account), and all three are blocked in code.
+
+**Before and after** (same tasks; scope matches the bars):
+
+| | Baseline: Haiku 5.5, original agent | Final: Sonnet 5.5 + code checks | Paired difference in pass^1 |
+|---|---|---|---|
+| Own harness, 39 tasks × 4 | pass^1 79.5% · pass^4 66.7% | pass^1 86.5% · pass^4 69.2% | +7.1 pts (95% CI −3.2 to +17.9) |
+| τ²-bench harness, 112 tasks × 4 | pass^1 77.5% · pass^4 52.7% | pass^1 86.6% · pass^4 72.3% | +9.2 pts (95% CI +4.5 to +13.8) |
+| Wrong changes (hand review) | ~1.4% (2 of 146 on train) | 0.17% (1 of 604 on test) | |
+
+The gain comes from two sources: a stronger model, and code checks that make whole classes of mistakes
+impossible ([D31](DECISIONS.md)). With the same checks, Haiku reached pass^1 82.5% on train but still made 0.7%
+wrong changes, so it missed A3. Opus matched Sonnet's pass^1 at twice the cost, with lower pass^2 ([D33](DECISIONS.md)).
+No fine-tuning was used.
+
+**A bug in the benchmark.** τ²-bench's `modify_pending_order_items` (commit 989d328) writes the last new item's
+price and options onto every item swapped in the same call. Scoring is unaffected, because the expected database
+comes from the same code. In one episode the agent noticed the broken order record and told the customer, instead
+of reporting success.
+
+τ²-bench numbers come from a **custom configuration**, not a leaderboard submission: the agent runs behind a policy
+gate, and both the simulated customer and the judge are Claude models (D22). Published scores use other customer
+simulators and aren't directly comparable.
+
+### Baseline before the code checks (Haiku 5.5, original agent)
+Kept for the architecture comparisons (router vs single agent, gate on vs shadow mode, chat vs voice). Full tables
+are in [evals/RESULTS.md](evals/RESULTS.md); failure severity for every run is in [evals/SEVERITY.md](evals/SEVERITY.md).
 
 <!-- results:start -->
 | Measure | Setup | Result |
@@ -25,18 +74,9 @@ API-equivalent, computed from token counts. About 2,500 episodes in total, 0 har
 | Cost | per conversation (agent, simulated customer, judge) | $0.013 per conversation (agent $0.004, customer $0.004, judge $0.005); $0.018 per resolved task |
 <!-- results:end -->
 
-τ²-bench numbers are a **custom configuration**, not a leaderboard submission: the agent has a router and a policy
-gate, and both the simulated customer and the judge are Claude models (D22). Published scores use other models and
-customer simulators and are not directly comparable.
-
-Also measured (D28, D29): a stronger agent model (Sonnet 5.5, 40 tasks × 2) reaches pass^1 83.8% vs 77.5% for Haiku
-on the same trials (+6.3 pts, 95% CI -2.5 to +16.3) at about 16× the agent cost per conversation ($0.050 vs
-$0.003). Prompt rules written from an error analysis on the train split fixed the failures they targeted but did
-not raise overall train pass^1 (83.8% → 81.1% / 82.4%), so the original prompt was kept.
-
 ## How it works
 ```
-customer ─▶ Next.js chat ─▶ FastAPI on AWS Lambda ─▶ agent loop (Claude Haiku, tool use)
+customer ─▶ Next.js chat ─▶ FastAPI on AWS Lambda ─▶ agent loop (Claude Sonnet, tool use)
                                                         │ every tool call
                                                         ▼
                                                    policy gate (code, not prompt)
@@ -46,9 +86,14 @@ customer ─▶ Next.js chat ─▶ FastAPI on AWS Lambda ─▶ agent loop (Cla
                                                         ▼
                                 Shopify store (system of record) ⇄ Postgres mirror (Neon), signed webhooks
 ```
-- **Policy gate** (`src/order_ops/gate.py`): the rules a jailbroken model still can't break. A write needs an
-  authenticated customer who owns the order and an explicit "yes" in their latest message; each "yes" pays for one
-  change; money movements over $250 wait for a supervisor; the same write never runs twice.
+- **Policy gate** (`src/order_ops/gate.py`, `confirm.py`): the rules a jailbroken model still can't break. A write
+  needs an authenticated customer who owns the order. The first call to a change tool changes nothing. It returns
+  a summary that code builds from the exact arguments and the store's data: items, options, prices, price
+  difference, refund target, and the items on the order the change leaves out. The customer sees that summary, and
+  their next explicit "yes" binds to a fingerprint of those exact arguments, so only an identical call runs.
+  Every address field, payment method and item id must come from the customer or the account's data, so the
+  model can't fill in a value itself. Money movements over $250 wait for a supervisor, and the same write never
+  runs twice. After a change, code writes the "Done: ..." line, not the model.
 - **Router + specialists** (`router.py`): an alternative architecture with context isolation, measured against the
   single agent.
 - **Tracing** (`tracing.py`): one OpenTelemetry trace per conversation (model calls with tokens and cost, tool

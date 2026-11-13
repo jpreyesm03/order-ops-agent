@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from . import db
+from .runlog import latest
 
 EVALS = db.ROOT / "evals"
 README = db.ROOT / "README.md"
@@ -58,6 +59,7 @@ def load_runs(evals: Path = EVALS) -> dict[str, Run]:
             results = [json.loads(line) for line in (d / "results.jsonl").read_text().splitlines() if line.strip()]
             for r in results:
                 r["task_id"] = str(r["task_id"])
+            results = list(latest(results).values())  # a resumed run can save an episode twice; keep the last
             summary = json.loads((d / "summary.json").read_text()) if (d / "summary.json").exists() else {}
             runs[d.name] = Run(d.name, harness, summary, results)
     return runs
