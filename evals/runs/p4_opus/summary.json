@@ -1,0 +1,33 @@
+{
+  "pass^1": 0.851,
+  "pass^2": 0.797,
+  "episodes": 148,
+  "errors": 0,
+  "db_match_rate": 0.878,
+  "nl_ok_rate": 0.953,
+  "blocked_by_gate": {},
+  "would_block_if_on": {},
+  "approvals_needed": 71,
+  "duplicate_writes_stopped": 0,
+  "agent_cost_per_episode_usd": 0.1397,
+  "total_cost_usd": 21.511,
+  "avg_agent_latency_ms_per_call": 9851,
+  "avg_turns": 6.4,
+  "label": "p4_opus",
+  "trials": 2,
+  "split": "train",
+  "arch": "single",
+  "gate": "on",
+  "channel": "chat",
+  "agent_model": "claude-opus-5-5",
+  "agent_effort": "medium",
+  "approval_threshold": 250.0,
+  "backend": "subscription",
+  "stopped": null,
+  "planned_episodes": 148,
+  "complete": true,
+  "plan_usage_at_end": {
+    "five_hour": 0.28,
+    "seven_day": 0.5
+  }
+}
