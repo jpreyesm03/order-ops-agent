@@ -84,3 +84,26 @@ def test_limit_messages_from_the_cli_stop_the_run():
                                                                result="API Error: 500", errors=None)), RuntimeError)
     assert isinstance(sub.as_stop(RuntimeError("Claude AI usage limit reached|1731400000")), guard.QuotaStop)
     assert isinstance(sub.as_stop(RuntimeError("connection reset")), RuntimeError)
+
+
+def test_stop_does_not_wait_for_an_episode_stuck_mid_call(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    monkeypatch.setattr(runlog, "STOP_GRACE_S", 0.3)
+    release = threading.Event()
+
+    def run_one(job):  # noqa: ANN001
+        if job == ("t0", 0):
+            release.wait(10)  # stuck, like a CLI call that never returns after the quota stop
+            return {"task_id": job[0], "trial": job[1], "reward": 1.0}
+        if job == ("t0", 1):
+            time.sleep(0.05)
+            raise guard.QuotaStop("usage at 80%")
+        return {"task_id": job[0], "trial": job[1], "reward": 1.0}
+
+    started = time.monotonic()
+    rows, stopped = runlog.run_jobs(JOBS[:2], key, run_one, tmp_path, 2, str)
+    release.set()
+    assert stopped and time.monotonic() - started < 3
+    assert runlog.load(tmp_path / "results.jsonl") == []  # neither the stopped nor the stuck episode is saved

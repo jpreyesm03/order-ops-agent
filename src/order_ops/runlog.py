@@ -14,13 +14,15 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
 STOPPED_EXIT_CODE = 3
+STOP_GRACE_S = 180.0  # after a stop, how long episodes already running may take to finish and be saved
 
 
 def key(row: dict) -> tuple[str, int]:
@@ -84,24 +86,35 @@ def run_jobs(jobs: list, job_key: Callable[[Any], tuple[str, int]], run_one: Cal
               flush=True)
     stopped, new, t0 = None, [], time.perf_counter()
     spent = sum(r.get("cost_usd", 0.0) for k, r in previous.items() if k in done)
-    with ThreadPoolExecutor(max(concurrency, 1)) as pool, open(path, "a") as f:
-        futures = [pool.submit(run_one, j) for j in todo]
-        for fut in as_completed(futures):
-            try:
-                r = fut.result()
-            except BaseException as e:  # guard.EvalStop (or Ctrl-C): this episode is not saved, it reruns on resume
-                if stopped is None:
-                    stopped = f"{type(e).__name__}: {e}"
-                    print(f"STOPPING (nothing lost; unfinished episodes rerun on resume): {stopped}", flush=True)
-                    pool.shutdown(wait=False, cancel_futures=True)
-                continue
-            append(f, r)
-            new.append(r)
-            spent += r.get("cost_usd", 0.0)
-            n = len(done) + len(new)
-            eta = (time.perf_counter() - t0) / len(new) * (len(jobs) - n)
-            print(f"[{n}/{len(jobs)}] {describe(r)} · ${spent:.2f} API-equivalent so far · ETA {eta / 60:.0f} min",
-                  flush=True)
+    pool = ThreadPoolExecutor(max(concurrency, 1))
+    pending = {pool.submit(run_one, j) for j in todo}
+    deadline = None  # set at the first stop: running episodes get STOP_GRACE_S to finish, then we leave them
+    with open(path, "a") as f:
+        while pending:
+            timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
+            finished, pending = wait(pending, timeout=timeout, return_when=FIRST_COMPLETED)
+            if not finished:
+                print(f"{len(pending)} episodes still running {STOP_GRACE_S:.0f} s after the stop; not waiting for "
+                      "them (they rerun on resume)", flush=True)
+                break
+            for fut in finished:
+                try:
+                    r = fut.result()
+                except BaseException as e:  # guard.EvalStop (or Ctrl-C): not saved, it reruns on resume
+                    if stopped is None:
+                        stopped = f"{type(e).__name__}: {e}"
+                        print(f"STOPPING (nothing lost; unfinished episodes rerun on resume): {stopped}", flush=True)
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        deadline = time.monotonic() + STOP_GRACE_S
+                    continue
+                append(f, r)
+                new.append(r)
+                spent += r.get("cost_usd", 0.0)
+                n = len(done) + len(new)
+                eta = (time.perf_counter() - t0) / len(new) * (len(jobs) - n)
+                print(f"[{n}/{len(jobs)}] {describe(r)} · ${spent:.2f} API-equivalent so far · "
+                      f"ETA {eta / 60:.0f} min", flush=True)
+    pool.shutdown(wait=stopped is None)  # after a stop, never block on an episode stuck mid-call
     rows = latest([r for r in previous.values() if key(r) in wanted] + new)
     return list(rows.values()), stopped
 
@@ -114,6 +127,10 @@ def finish(stopped: str | None, rows: list[dict], planned: int, module: str, lab
         args = sys.argv[1:] if "--label" in sys.argv else [*sys.argv[1:], "--label", label]
         print(f"\nSTOPPED SAFELY: {saved}/{planned} episodes saved. Resume after the limit resets with:\n"
               f"  uv run --group tau2 --group evals python -m {module} {' '.join(args)}", flush=True)
+        if any(t is not threading.main_thread() and not t.daemon for t in threading.enumerate()):
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(STOPPED_EXIT_CODE)  # an episode thread is stuck mid-call; a normal exit would wait for it
         sys.exit(STOPPED_EXIT_CODE)
     if errors:
         print(f"\n{errors} episodes errored or are missing; rerun the same command to retry only those.", flush=True)
