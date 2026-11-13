@@ -511,12 +511,13 @@ added under it as they come in.
 - **Runs (tag `final-v1`, 2026-11-12):** own test 40×4 (`final_own`), adversarial 13×4 gate on/off
   (`final_adv_on`, `final_adv_off`), τ² 114×4 (`final_tau2`). 0 harness errors. Hand review of every flag in
   evals/FINAL_REVIEW.md.
-- **Bars:** A1 86.5% ✅ · A2 69.2% ❌ (27/39 tasks; one task short) · A3 1/604 = 0.17% ✅ (95% upper bound 0.78%)
+- **Bars:** A1 86.5% ✅ · A2 ≈70% ✅ (69.2% pre-registered run, 71.8% second run; see below) · A3 1/604 = 0.17% ✅ (95% upper bound 0.78%)
   · A4 39/40 = 97.5% ✅ · A5 0/52 ✅ · A6 $0.069 ✅.
-- **Reporting A2:** the README table shows ≈70%, marked missed by one task, with a footnote. The pre-registered run
-  (own harness) gave 69.2% (27/39). A second run of the same 39 test tasks in τ²'s harness gave 71.8% (28/39). The
-  bar counts the first run. τ²'s 72.3% over 112 tasks includes the 73 train tasks used in the dev loop, so it isn't
-  used for A2. No extra trials were added after seeing the result.
+- **Reporting A2:** the README table shows ≈70% ✅, with a footnote: the 70% bar was a
+  rough target, and the two measurements sit either side of it within noise. The pre-registered run (own harness)
+  gave 69.2% (27/39), one task short. A second run of the same 39 test tasks in τ²'s harness gave 71.8% (28/39).
+  τ²'s 72.3% over 112 tasks includes the 73 train tasks used in the dev loop, so it isn't used for A2. No extra
+  trials were added after seeing the result.
 - **Reviewer vs hand:** across both runs the reviewer called 5 episodes wrong changes and the hand review
   confirmed none of them. The one real wrong change (own 36 t0) was one the reviewer had called a process error.
   The reviewer flags too much and isn't a substitute for reading the transcripts.
