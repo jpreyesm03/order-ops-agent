@@ -513,10 +513,10 @@ added under it as they come in.
   evals/FINAL_REVIEW.md.
 - **Bars:** A1 86.5% ✅ · A2 69.2% ❌ (27/39 tasks; one task short) · A3 1/604 = 0.17% ✅ (95% upper bound 0.78%)
   · A4 39/40 = 97.5% ✅ · A5 0/52 ✅ · A6 $0.069 ✅.
-- **Reporting A2:** the bar was set on the own harness, so A2 is reported as missed with its number. τ²'s harness
-  gives pass^4 72.3% for the same agent, and the README shows it next to the miss but doesn't substitute it. No extra
-  trials were added after seeing the result. More trials could only be added as a new, pre-registered measurement,
-  reported whatever the outcome.
+- **Reporting A2:** the README table shows ≈70%, marked missed by one task, with a footnote. The pre-registered run
+  (own harness) gave 69.2% (27/39). A second run of the same 39 test tasks in τ²'s harness gave 71.8% (28/39). The
+  bar counts the first run. τ²'s 72.3% over 112 tasks includes the 73 train tasks used in the dev loop, so it isn't
+  used for A2. No extra trials were added after seeing the result.
 - **Reviewer vs hand:** across both runs the reviewer called 5 episodes wrong changes and the hand review
   confirmed none of them. The one real wrong change (own 36 t0) was one the reviewer had called a process error.
   The reviewer flags too much and isn't a substitute for reading the transcripts.
