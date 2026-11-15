@@ -1,0 +1,10 @@
+{
+  "split": "tasks:17,18,26,40,56",
+  "arch": "single",
+  "gate": "on",
+  "channel": "chat",
+  "agent_model": "claude-sonnet-5-5",
+  "agent_effort": "medium",
+  "approval_threshold": 250.0,
+  "backend": "api"
+}

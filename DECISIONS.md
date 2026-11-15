@@ -558,3 +558,20 @@ added under it as they come in.
   return/exchange in one order and same-item exchanges are client policy questions for a real deployment. Worth
   building later: show an order's items and address when the customer says "my most recent order"; ask a
   clarifying question when a request is ambiguous; show a real supervisor queue time in the live app.
+
+## D36. Live demo redeployed on the final configuration, API parity check
+- **Why:** every scored run used the Claude plan through the Agent SDK (D27); the live demo calls the Messages API
+  directly. Same model and prompts, different client path, so 5 tasks were rerun through the API before calling the
+  demo "the measured agent".
+- **Deploy (2026-11-14):** the Nov 13 CI deploy had been cancelled by the history rewrite, so the live alias still
+  ran the Nov 12 image. Push of `aa0c1ca` → CI built, smoke-tested and released it (version 8); then
+  `scripts/lambda_service.sh` switched `AGENT_MODEL` to Sonnet 5.5 (version 9, smoke-checked before the alias moved).
+  Rollback: `scripts/lambda_rollback.sh 8`. API key from a separate workspace with its own monthly spend limit.
+- **Parity check** (`evals/runs/parity_api`): tasks 17, 18, 26, 40, 56 (address change, exchange, return, payment
+  change over $250, item change; each 4/4 in `final_own`), 1 trial each, `--backend api`: **5/5 passed**, same writes
+  as the plan runs, 0 errors. $0.285 total API cost ($0.055 agent per episode). Agent latency per model call
+  1.5 s vs 7.7 s on the plan backend (the plan path adds CLI overhead), so the live demo answers faster than the
+  eval timings suggest. Task 40 exercises the D35 fix: the agent now says the change "was approved by a supervisor
+  and is complete".
+- **Live smoke chat:** one read-only conversation on the deployed API answered correctly (both orders, items,
+  status), 20.5 s including a cold start.

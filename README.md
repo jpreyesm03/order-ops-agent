@@ -4,8 +4,8 @@ A customer-service agent that cancels, refunds, exchanges and edits orders for a
 policy, with the risky parts enforced in code instead of trusted to the model.
 
 **Live demo:** https://order-ops-agent.vercel.app (a real Shopify dev store; the supervisor console approves refunds
-over $250; it runs the earlier Haiku version until `final-v1` is redeployed
-after an API parity check) · **Decisions:** [DECISIONS.md](DECISIONS.md) · **Client brief:** [CLIENT_BRIEF.md](CLIENT_BRIEF.md)
+over $250; runs the final configuration, Sonnet 5.5, checked against the eval results on 5 tasks through the API,
+[D36](DECISIONS.md)) · **Decisions:** [DECISIONS.md](DECISIONS.md) · **Client brief:** [CLIENT_BRIEF.md](CLIENT_BRIEF.md)
 
 ## Results
 Release `final-v1`. Agent: Claude Sonnet 5.5. Simulated customer: Claude Haiku 5.5. Judge: Claude Sonnet 5.5.
