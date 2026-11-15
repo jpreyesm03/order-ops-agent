@@ -5,7 +5,7 @@ import { StatusPill } from "@/components/Chat";
 import { api, money, type Approval, type AuditRow, type Stats } from "@/lib/api";
 
 const OUTCOME_CLS: Record<AuditRow["outcome"], string> = {
-  ok: "text-ok",
+  ok: "text-faint",
   error: "text-warn",
   blocked: "text-bad",
   pending_approval: "text-warn",
@@ -52,40 +52,69 @@ export default function Console() {
   }
 
   const blocked = stats ? Object.values(stats.blocked_by_rule).reduce((a, b) => a + b, 0) : 0;
+  const tiles = stats
+    ? [
+        { label: "Conversations", value: stats.sessions },
+        { label: "Tool calls that succeeded", value: stats.tool_outcomes.ok ?? 0 },
+        { label: "Blocked by the gate", value: blocked },
+        { label: "Waiting for you", value: pending.length, hot: pending.length > 0 },
+      ]
+    : [];
 
   return (
-    <div className="space-y-6">
-      <section className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Supervisor console</h1>
-        <p className="text-muted">
-          Money movements above the limit stop here until a person decides. Approving runs the change exactly once.
+    <div>
+      <header className="grid gap-8 pt-16 pb-12 sm:pt-24 lg:grid-cols-12">
+        <div className="lg:col-span-8">
+          <p className="eyebrow rise">02 — Supervisor console</p>
+          <h1 className="rise mt-6 font-serif text-5xl leading-[1.02] tracking-tight sm:text-6xl">
+            Big refunds wait for <em className="text-accent">a person.</em>
+          </h1>
+        </div>
+        <p className="rise self-end text-[15px] leading-relaxed text-muted lg:col-span-4">
+          Money movements above the limit stop here until someone decides. Approving runs the change exactly once.
+          This page refreshes every few seconds.
         </p>
-      </section>
-      {error && <p className="text-sm text-bad">{error}</p>}
+      </header>
+      {error && <p className="mb-6 text-sm text-bad">{error}</p>}
 
       {stats && (
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Tile label="Conversations" value={stats.sessions} />
-          <Tile label="Changes applied" value={stats.tool_outcomes.ok ?? 0} hint="all tool calls that succeeded" />
-          <Tile label="Blocked by the gate" value={blocked} />
-          <Tile label="Waiting for you" value={pending.length} />
+        <section className="grid grid-cols-2 border-y border-line lg:grid-cols-4">
+          {tiles.map((t, i) => (
+            <div
+              key={t.label}
+              className={`py-6 pr-2 sm:px-6 ${i % 2 === 1 ? "border-l border-line pl-4" : ""} ${
+                i >= 2 ? "border-t border-line lg:border-t-0" : ""
+              } ${i === 2 ? "lg:border-l lg:pl-6" : ""}`}
+            >
+              <p className={`font-serif text-4xl tabular-nums sm:text-5xl ${t.hot ? "text-warn" : ""}`}>{t.value}</p>
+              <p className="eyebrow mt-2">{t.label}</p>
+            </div>
+          ))}
         </section>
       )}
 
-      <section className="rounded-lg border border-line bg-panel">
-        <h2 className="border-b border-line px-4 py-3 font-medium">Approval inbox</h2>
+      <section className="pt-12">
+        <div className="mb-4 flex items-baseline justify-between">
+          <p className="eyebrow">Approval inbox</p>
+          <span className="font-mono text-xs text-faint">{pending.length} pending</span>
+        </div>
         {pending.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-muted">Nothing waiting. Ask the agent for a large refund in the chat to see one arrive.</p>
+          <div className="rounded-2xl border border-dashed border-line px-6 py-10 text-center text-sm text-muted">
+            Nothing waiting. Ask the agent for a refund over $250 in the chat to see one arrive.
+          </div>
         ) : (
-          <ul className="divide-y divide-line">
+          <ul className="space-y-3">
             {pending.map((a) => (
-              <li key={a.approval_id} className="flex flex-wrap items-center gap-3 px-4 py-3 text-sm">
+              <li
+                key={a.approval_id}
+                className="flex flex-wrap items-center gap-4 rounded-2xl border border-line bg-panel px-5 py-4"
+              >
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium">
-                    {a.tool.replaceAll("_", " ")} · {a.order_id}
+                  <p className="font-medium capitalize">
+                    {a.tool.replaceAll("_", " ")} <span className="font-mono text-sm text-muted">{a.order_id}</span>
                   </p>
-                  <p className="text-xs text-muted">
-                    {money(a.amount)} · requested {new Date(a.created_at).toLocaleTimeString()} · {a.approval_id}
+                  <p className="mt-1 font-mono text-[11px] text-muted">
+                    requested {new Date(a.created_at).toLocaleTimeString()} · {a.approval_id}
                     {a.trace_url && (
                       <>
                         {" · "}
@@ -96,27 +125,36 @@ export default function Console() {
                     )}
                   </p>
                 </div>
-                <button onClick={() => decide(a.approval_id, false)} className="rounded border border-line px-3 py-1 hover:bg-background">
-                  Reject
-                </button>
-                <button onClick={() => decide(a.approval_id, true)} className="rounded bg-accent px-3 py-1 text-background">
-                  Approve
-                </button>
+                <p className="font-serif text-3xl tabular-nums">{money(a.amount)}</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => decide(a.approval_id, false)}
+                    className="rounded-full border border-line px-4 py-1.5 text-sm transition-colors hover:border-foreground"
+                  >
+                    Reject
+                  </button>
+                  <button
+                    onClick={() => decide(a.approval_id, true)}
+                    className="rounded-full bg-foreground px-4 py-1.5 text-sm text-background transition-opacity hover:opacity-85"
+                  >
+                    Approve
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
         )}
       </section>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <section className="rounded-lg border border-line bg-panel">
-          <h2 className="border-b border-line px-4 py-3 font-medium">Recent decisions</h2>
-          <ul className="divide-y divide-line text-sm">
-            {history.length === 0 && <li className="px-4 py-4 text-muted">No decisions yet.</li>}
+      <div className="grid gap-10 pt-14 lg:grid-cols-2">
+        <section>
+          <p className="eyebrow mb-4">Recent decisions</p>
+          <ul className="divide-y divide-line border-y border-line text-sm">
+            {history.length === 0 && <li className="py-4 text-muted">No decisions yet.</li>}
             {history.map((a) => (
-              <li key={a.approval_id} className="flex items-center justify-between gap-2 px-4 py-2">
+              <li key={a.approval_id} className="flex items-center justify-between gap-3 py-3">
                 <span className="truncate font-mono text-xs">{a.summary}</span>
-                <span className="flex items-center gap-2">
+                <span className="flex shrink-0 items-center gap-3">
                   {a.trace_url && (
                     <a href={a.trace_url} target="_blank" rel="noreferrer" className="text-xs text-muted underline">
                       trace
@@ -129,16 +167,16 @@ export default function Console() {
           </ul>
         </section>
 
-        <section className="rounded-lg border border-line bg-panel">
-          <h2 className="border-b border-line px-4 py-3 font-medium">Audit log</h2>
-          <div className="max-h-[420px] overflow-y-auto">
+        <section>
+          <p className="eyebrow mb-4">Audit log</p>
+          <div className="scroll-quiet max-h-[440px] overflow-y-auto border-y border-line">
             <table className="w-full text-xs">
               <tbody className="divide-y divide-line">
                 {audit.map((r) => (
                   <tr key={r.id}>
-                    <td className="px-4 py-1.5 text-muted">{new Date(r.ts).toLocaleTimeString()}</td>
-                    <td className="py-1.5 font-mono">{r.tool}</td>
-                    <td className={`px-4 py-1.5 ${OUTCOME_CLS[r.outcome]}`}>{r.outcome.replace("_", " ")}</td>
+                    <td className="py-2 pr-4 font-mono text-faint">{new Date(r.ts).toLocaleTimeString()}</td>
+                    <td className="py-2 font-mono">{r.tool}</td>
+                    <td className={`py-2 pl-4 text-right ${OUTCOME_CLS[r.outcome]}`}>{r.outcome.replace("_", " ")}</td>
                   </tr>
                 ))}
               </tbody>
@@ -146,15 +184,6 @@ export default function Console() {
           </div>
         </section>
       </div>
-    </div>
-  );
-}
-
-function Tile({ label, value, hint }: { label: string; value: number; hint?: string }) {
-  return (
-    <div className="rounded-lg border border-line bg-panel p-3" title={hint}>
-      <p className="text-xs text-muted">{label}</p>
-      <p className="text-2xl font-semibold tabular-nums">{value}</p>
     </div>
   );
 }
