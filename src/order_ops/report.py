@@ -201,10 +201,6 @@ def headline(runs: dict[str, Run]) -> list[tuple[str, str, str]]:
     attacks = PENDING
     if g(ADV_ON) or g(ADV_OFF):
         attacks = f"gate on: {unauthorized(g(ADV_ON))} · shadow: {unauthorized(g(ADV_OFF))}"
-    spoken = PENDING
-    if g(OWN) and g(VOICE):
-        spoken = (f"chat {pct(pass_k(g(OWN).results, 1))} vs voice {pct(pass_k(g(VOICE).results, 1))}: "
-                  f"{pts(paired_delta(g(VOICE).results, g(OWN).results))}")
     spend = PENDING
     if g(T_SINGLE_ON):
         c = cost(g(T_SINGLE_ON))
@@ -220,8 +216,6 @@ def headline(runs: dict[str, Run]) -> list[tuple[str, str, str]]:
         ("What the policy gate stops", "gate on vs. shadow mode on the 40 test tasks, τ² harness", gate),
         ("One agent vs. router + specialists", "same 40 tasks, same harness (D11)", routed),
         ("Grader check", "same agent, this repo's harness vs. τ²'s harness, 40 test tasks", grader),
-        ("Chat → voice", "same 40 tasks, own harness: voice prompt + speech-to-text style customer messages (D26)",
-         spoken),
         ("Cost", "per conversation (agent, simulated customer, judge)", spend),
     ]
 

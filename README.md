@@ -77,7 +77,7 @@ gate, and both the simulated customer and the judge are Claude models (D22). Pub
 simulators and aren't directly comparable.
 
 ### Baseline before the code checks (Haiku 5.5, original agent)
-Kept for the architecture comparisons (router vs single agent, gate on vs shadow mode, chat vs voice). Full tables
+Kept for the architecture comparisons (router vs single agent, gate on vs shadow mode). Full tables
 are in [evals/RESULTS.md](evals/RESULTS.md); failure severity for every run is in [evals/SEVERITY.md](evals/SEVERITY.md).
 
 <!-- results:start -->
@@ -89,7 +89,6 @@ are in [evals/RESULTS.md](evals/RESULTS.md); failure severity for every run is i
 | What the policy gate stops | gate on vs. shadow mode on the 40 test tasks, τ² harness | blocked (on): confirmation 3; would block (shadow): confirmation 5; pass^1 on − off -3.1 pts (95% CI -11.9 to +4.4, 40 tasks) |
 | One agent vs. router + specialists | same 40 tasks, same harness (D11) | single 76.9% vs routed 83.8%: +6.9 pts (95% CI -1.2 to +15.6, 40 tasks) |
 | Grader check | same agent, this repo's harness vs. τ²'s harness, 40 test tasks | pass^1 77.5% here vs 76.9% in τ²; per-task verdicts agree on 92.5% of 40 tasks |
-| Chat → voice | same 40 tasks, own harness: voice prompt + speech-to-text style customer messages (D26) | chat 77.5% vs voice 82.5%: +5.0 pts (95% CI +0.0 to +10.0, 40 tasks) |
 | Cost | per conversation (agent, simulated customer, judge) | $0.013 per conversation (agent $0.004, customer $0.004, judge $0.005); $0.018 per resolved task |
 <!-- results:end -->
 
@@ -121,10 +120,6 @@ customer ─▶ Next.js chat ─▶ FastAPI on AWS Lambda ─▶ agent loop (Cla
 - **Evals** (`evaluate.py`, `tau2_run.py`): τ²-bench retail tasks graded on the final database state plus
   natural-language assertions, reported as pass^k. The same agent also runs inside τ²-bench's own orchestrator,
   customer simulator and evaluator (`tau2_adapter.py`), with the gate on or in shadow mode.
-- **Voice** (`voice.py`): a phone call through Twilio ConversationRelay into the same agent and gate. A hedged
-  "yeah, I guess" doesn't count as consent, ids and emails are read back, and a filler line covers tool time.
-  Barge-in keeps only what the caller heard. Runs on the same Lambda through API Gateway WebSocket
-  ([evals/VOICE.md](evals/VOICE.md)).
 - **MCP server** (`mcp_server.py`): the same tools behind the same gate, for any MCP client.
 
 ## Run it locally
@@ -146,7 +141,7 @@ Evals (`uv sync --group tau2 --group evals`; add `--backend subscription` to run
 Python, FastAPI, PostgreSQL (psycopg), Anthropic Messages API (manual tool-use loop), Claude Agent SDK (evals on a
 Claude plan), τ²-bench, OpenTelemetry,
 Next.js + TypeScript + Tailwind, Docker, AWS Lambda (Function URL, SSM, EventBridge Scheduler, X-Ray), Neon,
-Vercel, Shopify Admin GraphQL API + webhooks, Twilio ConversationRelay, API Gateway WebSocket, GitHub Actions
+Vercel, Shopify Admin GraphQL API + webhooks, GitHub Actions
 (OIDC deploys), MCP.
 
 ## Data

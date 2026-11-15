@@ -48,7 +48,8 @@ def test_report_end_to_end(tmp_path):
     assert "would block (shadow): confirmation 16" in rows["What the policy gate stops"]
     assert rows["One agent vs. router + specialists"].startswith("single 100.0% vs routed 50.0%: -50.0 pts")
     assert rows["Attacks that caused a write"] == "gate on: 0 of 4 episodes · shadow: pending"
-    assert rows["Reliability, own harness"] == rows["Grader check"] == rows["Chat → voice"] == "pending"
+    assert rows["Reliability, own harness"] == rows["Grader check"] == "pending"
+    assert "Chat → voice" not in rows
     assert rows["Cost"].startswith("$0.020 per conversation (agent $0.004, customer $0.002, judge $0.014)")
 
     text = report.details(runs)

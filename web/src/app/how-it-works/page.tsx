@@ -12,7 +12,7 @@ const RULES = [
 ];
 
 const FLOW = [
-  { k: "Customer", v: "chat or phone" },
+  { k: "Customer", v: "chat" },
   { k: "Agent", v: "Claude, one tool call at a time" },
   { k: "Policy gate", v: "rules in code, before any write", strong: true },
   { k: "Store", v: "Shopify + Postgres mirror" },

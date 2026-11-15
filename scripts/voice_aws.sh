@@ -37,7 +37,7 @@ fi
 SECRET="$(aws ssm get-parameter --name "$SSM/VOICE_RELAY_SECRET" --with-decryption --query Parameter.Value \
   --output text)"
 
-integration() {  # $1 route key, $2 path, $3 request parameters (JSON)
+integration() {  # $1 route key, $2 path, $3 request parameters (JSON), $4 route request parameters (optional)
   local id
   id="$(aws apigatewayv2 get-integrations --api-id "$API_ID" \
     --query "Items[?IntegrationUri=='$FN_URL$2'].IntegrationId | [0]" --output text)"
@@ -52,11 +52,14 @@ integration() {  # $1 route key, $2 path, $3 request parameters (JSON)
   route="$(aws apigatewayv2 get-routes --api-id "$API_ID" --query "Items[?RouteKey=='$1'].RouteId | [0]" \
     --output text)"
   if [[ "$route" == "None" || -z "$route" ]]; then
-    aws apigatewayv2 create-route --api-id "$API_ID" --route-key "$1" --target "integrations/$id" >/dev/null
+    # a mapping from route.request.querystring.X only validates if the route declares X
+    aws apigatewayv2 create-route --api-id "$API_ID" --route-key "$1" --target "integrations/$id" \
+      ${4:+--request-parameters "$4"} >/dev/null
   fi
   echo "apigw: $1 -> $2"
 }
-integration '$connect' /voice/connect '{"integration.request.querystring.t": "route.request.querystring.t"}'
+integration '$connect' /voice/connect '{"integration.request.querystring.t": "route.request.querystring.t"}' \
+  '{"route.request.querystring.t": {"Required": false}}'
 integration '$default' /voice/events "{\"integration.request.header.X-Connection-Id\": \"context.connectionId\",
   \"integration.request.header.X-Voice-Secret\": \"'$SECRET'\"}"
 

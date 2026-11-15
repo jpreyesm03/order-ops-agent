@@ -575,3 +575,20 @@ added under it as they come in.
   and is complete".
 - **Live smoke chat:** one read-only conversation on the deployed API answered correctly (both orders, items,
   status), 20.5 s including a cold start.
+
+## D37. Phone channel not deployed: a Twilio number costs a $20 prepaid upgrade
+- **Context:** D26 built the phone channel and measured it offline (voice prompt + speech-to-text style messages,
+  40 tasks: 82.5% vs chat 77.5%). Going live needs a phone number of our own pointed at `/voice/incoming`.
+- **What happened (2026-11-15):** the AWS side was set up and checked: API Gateway WebSocket, secrets in SSM,
+  the Lambda's permission to reply on connections; an unsigned request to `/voice/incoming` gets 403 (the token
+  is loaded and Twilio's signature is enforced). `scripts/voice_aws.sh` needed one fix on its first real run: a
+  mapping from `route.request.querystring.t` only validates if the `$connect` route declares that parameter.
+  Twilio's trial then blocked the last step: it only lends a shared "Try out Voice" number, which can't be pointed
+  at a webhook, and buying a number requires upgrading with a $20 prepaid balance (auto-recharge on by default).
+- **Decision:** don't pay for it. The phone channel is not part of the live demo or the README. The code, tests and
+  runbook (`evals/VOICE.md`, `scripts/voice_aws.sh`, `scripts/twilio_number.sh`) stay, so going live later is
+  an upgrade + `twilio_number.sh buy` + one call.
+- **Running cost if deployed:** $1.15/month for the number plus about $0.08/min per call (ConversationRelay $0.07,
+  phone line ~$0.0085 inbound); the 30 calls/day and 8 min/call guards cap a public number.
+- **Why:** the demo already shows what matters (gate, evals, live store); $20 up front for a feature reviewers
+  would try once isn't worth it before there's a reason (an interviewer or a role that asks for voice).
