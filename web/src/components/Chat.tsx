@@ -344,8 +344,12 @@ export default function Chat() {
   );
 }
 
+// A write the gate holds until the customer says yes comes back not-ok with no error and no block.
+const awaitingYes = (e: ToolEvent) => !e.ok && !e.error && !e.blocked && !e.pending_approval;
+
 function dotColor(e: ToolEvent) {
   if (e.blocked) return "bg-bad";
+  if (awaitingYes(e)) return "bg-accent";
   if (e.pending_approval || !e.ok) return "bg-warn";
   return "bg-ok";
 }
@@ -353,6 +357,7 @@ function dotColor(e: ToolEvent) {
 function EventPill({ e }: { e: ToolEvent }) {
   if (e.blocked) return <span className="text-bad">blocked by gate</span>;
   if (e.pending_approval) return <span className="text-warn">needs approval</span>;
+  if (awaitingYes(e)) return <span className="text-accent">waiting for a yes</span>;
   if (!e.ok) return <span className="text-warn">error</span>;
   return <span className="text-faint">ok</span>;
 }
