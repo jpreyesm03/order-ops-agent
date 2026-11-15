@@ -29,7 +29,7 @@ tracing = {"ORDER_OPS_TRACE_XRAY": "1", "ORDER_OPS_TRACE_URL":
            f"https://{sys.argv[3]}.console.aws.amazon.com/cloudwatch/home?region={sys.argv[3]}#xray:traces/{{xray_id}}"} \
     if sys.argv[2] == "1" else {}
 print(json.dumps({"Variables": tracing | {
-    "CORS_ORIGINS": sys.argv[1], "APPROVAL_THRESHOLD_USD": "250", "AGENT_MODEL": "claude-haiku-5-5",
+    "CORS_ORIGINS": sys.argv[1], "APPROVAL_THRESHOLD_USD": "250", "AGENT_MODEL": "claude-sonnet-5-5",
     "AGENT_EFFORT": "medium", "MAX_TURNS_PER_SESSION": "40", "TURNS_PER_IP_PER_HOUR": "60", "TURNS_PER_DAY": "1500",
     "STORE_BACKEND": "shopify", "SHOPIFY_STORE": "order-ops-demo.myshopify.com", "SHOPIFY_SEED_USERS": "8",
     "SSM_PARAMETER_PATH": "/order-ops/", "LAMBDA_ALIAS": "live"}}))
