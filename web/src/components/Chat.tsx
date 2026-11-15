@@ -134,7 +134,7 @@ export default function Chat() {
           role: "assistant",
           text: r.reply,
           events: r.events,
-          meta: `${(r.latency_ms / 1000).toFixed(1)} s · ${money(r.cost_usd)}`,
+          meta: `${(r.latency_ms / 1000).toFixed(1)} s · ${r.cost_usd < 0.01 ? "<$0.01" : money(r.cost_usd)}`,
         },
       ]);
       setUserId(r.user_id);
