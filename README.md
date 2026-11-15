@@ -36,6 +36,24 @@ so A2 is counted as met at the bar.
   for the final run (a "just fill in the address" request, an address planted in another order's data, and a
   refund card that isn't on the account), and all three are blocked in code.
 
+**Checking the grader against human labels** ([D35](DECISIONS.md)). I labeled 40 final conversations myself,
+blind to the grader and the reviewer: one per test task, with a failed trial picked where one existed so failures
+are well represented (13 of the 40 failed by the grader).
+
+| | Result |
+|---|---|
+| Agreement with the grader | 70% blind (Cohen's κ 0.15) · 77.5% after reviewing the 6 unclear cases (κ 0.38) |
+| Real agent errors the grader missed | **0** (all 3 agent errors I found were also failed by the grader) |
+| Grader failures that were agent errors | **3 of 13**: 1 wrong change, 2 process errors. The other 10: the simulated customer strayed from its script (9) or the expected answer relied on data that doesn't exist (1) |
+| LLM failure reviewer vs my labels | same failure type on 7 of 10 |
+
+The low κ is a difference in what is measured, not noise: the grader checks the final database against the
+customer's hidden script, so it fails the agent when the simulated customer asks for something else. It never
+passed a conversation where the agent got it wrong, which makes the bars above a conservative measure. Labeling also
+found one issue neither automatic check could see: in eval mode, approvals over $250 ran at once, so the agent
+first said a change needed a supervisor and then that it was done. Fixed so eval mode reports the approval the
+way the live app does; database results are unchanged.
+
 **Before and after** (same tasks; scope matches the bars):
 
 | | Baseline: Haiku 5.5, original agent | Final: Sonnet 5.5 + code checks | Paired difference in pass^1 |

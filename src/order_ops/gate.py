@@ -363,6 +363,7 @@ class Gate:
                                                            "done again.", "result": prior[0]}
         amount = self.amount_at_stake(tool, args)
         trace.get_current_span().set_attribute("order_ops.amount_usd", float(amount))
+        auto_approved = False
         if amount > Decimal(str(session.approval_threshold)) and not self.enforce:
             self._shadow(session, tool, "write", args, "approval")
         elif amount > Decimal(str(session.approval_threshold)):
@@ -376,13 +377,19 @@ class Gate:
                 return {"ok": True, "pending_approval": True, "approval_id": approval_id,
                         "note": f"${amount} is above the ${session.approval_threshold:.0f} limit, so a human "
                                 "supervisor must approve it. Tell the customer it is submitted and pending review."}
+            auto_approved = True
         result = self._execute_once(key, tool, args)
         session.confirmation = False  # one "yes" pays for one successful change
         session.confirmed = None
         session.stats["writes"] += 1
         session.note_done(tool, args)
         self._audit(session, tool, "write", args, "ok", f"${amount}")
-        return {"ok": True, "result": result}
+        out = {"ok": True, "result": result}
+        if auto_approved:
+            # Eval mode approves at once; say so, so the agent's account matches what the live app would show.
+            out["note"] = (f"${amount} is above the ${session.approval_threshold:.0f} limit; a supervisor reviewed "
+                           "and approved it, and it is done. Tell the customer it was approved and completed.")
+        return out
 
     def _execute_once(self, key: str, tool: str, args: dict[str, Any]) -> Any:
         with self.conn.transaction():  # the write and its idempotency key commit together

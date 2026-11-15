@@ -1,0 +1,854 @@
+{
+ "run": "final_own",
+ "labeler": "project author, blind to grader and reviewer",
+ "sample": "one episode per test task (task 64 excluded, D32), a failed trial picked where one exists, plus one extra failed episode; 40 episodes, shuffled",
+ "labeled": "2026-11-14",
+ "rows": [
+  {
+   "item": 1,
+   "task_id": "53",
+   "trial": 2,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 2,
+   "task_id": "5",
+   "trial": 2,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": false,
+    "db_match": false,
+    "nl_ok": true
+   },
+   "reviewer_verdict": "customer_driven"
+  },
+  {
+   "item": 3,
+   "task_id": "74",
+   "trial": 3,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 4,
+   "task_id": "65",
+   "trial": 2,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 5,
+   "task_id": "61",
+   "trial": 3,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 6,
+   "task_id": "17",
+   "trial": 2,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 7,
+   "task_id": "97",
+   "trial": 1,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 8,
+   "task_id": "60",
+   "trial": 1,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": false,
+    "db_match": false,
+    "nl_ok": false
+   },
+   "reviewer_verdict": "customer_driven"
+  },
+  {
+   "item": 9,
+   "task_id": "33",
+   "trial": 1,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": true
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": true,
+    "reason": "simulated customer refused to give the address; agent changed nothing and invented nothing"
+   },
+   "grader": {
+    "pass": false,
+    "db_match": false,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 10,
+   "task_id": "86",
+   "trial": 0,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 11,
+   "task_id": "70",
+   "trial": 0,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 12,
+   "task_id": "26",
+   "trial": 1,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 13,
+   "task_id": "12",
+   "trial": 2,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 14,
+   "task_id": "94",
+   "trial": 0,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 15,
+   "task_id": "32",
+   "trial": 3,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "incorrect",
+    "fault": "agent_process_error",
+    "changed_after_review": true,
+    "reason": "transferred on the lost-item refund before doing the 2 cancels + 1 return"
+   },
+   "grader": {
+    "pass": false,
+    "db_match": false,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 16,
+   "task_id": "27",
+   "trial": 0,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 17,
+   "task_id": "71",
+   "trial": 1,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 18,
+   "task_id": "111",
+   "trial": 2,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 19,
+   "task_id": "101",
+   "trial": 0,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 20,
+   "task_id": "62",
+   "trial": 3,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 21,
+   "task_id": "38",
+   "trial": 1,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": false,
+    "db_match": false,
+    "nl_ok": true
+   },
+   "reviewer_verdict": "customer_driven"
+  },
+  {
+   "item": 22,
+   "task_id": "79",
+   "trial": 3,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": false,
+    "db_match": false,
+    "nl_ok": true
+   },
+   "reviewer_verdict": "agent_wrong_change"
+  },
+  {
+   "item": 23,
+   "task_id": "56",
+   "trial": 2,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 24,
+   "task_id": "40",
+   "trial": 3,
+   "blind": {
+    "outcome": "incorrect",
+    "fault": "agent_wrong_change",
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": "harness_issue",
+    "changed_after_review": true,
+    "reason": "eval mode runs approvals at once, so the agent's words contradicted each other; the live app waits for a supervisor"
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 25,
+   "task_id": "90",
+   "trial": 3,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 26,
+   "task_id": "60",
+   "trial": 2,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": false,
+    "db_match": false,
+    "nl_ok": false
+   },
+   "reviewer_verdict": "customer_driven"
+  },
+  {
+   "item": 27,
+   "task_id": "100",
+   "trial": 2,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": false,
+    "db_match": false,
+    "nl_ok": true
+   },
+   "reviewer_verdict": "customer_driven"
+  },
+  {
+   "item": 28,
+   "task_id": "49",
+   "trial": 1,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": false,
+    "db_match": false,
+    "nl_ok": true
+   },
+   "reviewer_verdict": "agent_wrong_change"
+  },
+  {
+   "item": 29,
+   "task_id": "42",
+   "trial": 3,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 30,
+   "task_id": "18",
+   "trial": 2,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": true
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 31,
+   "task_id": "9",
+   "trial": 3,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "incorrect",
+    "fault": "agent_process_error",
+    "changed_after_review": true,
+    "reason": "filtered lamps by color and hid the preferred AC-adapter option"
+   },
+   "grader": {
+    "pass": false,
+    "db_match": false,
+    "nl_ok": true
+   },
+   "reviewer_verdict": "agent_process_error"
+  },
+  {
+   "item": 32,
+   "task_id": "108",
+   "trial": 0,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 33,
+   "task_id": "45",
+   "trial": 0,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 34,
+   "task_id": "102",
+   "trial": 3,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 35,
+   "task_id": "51",
+   "trial": 1,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 36,
+   "task_id": "68",
+   "trial": 3,
+   "blind": {
+    "outcome": "incorrect",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "incorrect",
+    "fault": "benchmark_issue",
+    "changed_after_review": true,
+    "reason": "order data has no dates; expected answer relies on an unwritten list-order rule"
+   },
+   "grader": {
+    "pass": false,
+    "db_match": true,
+    "nl_ok": false
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 37,
+   "task_id": "36",
+   "trial": 0,
+   "blind": {
+    "outcome": "incorrect",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "incorrect",
+    "fault": "agent_wrong_change",
+    "changed_after_review": true,
+    "reason": "said $1,131.04 was the cheapest total; a size L shirt made it $1,130.85; the customer cancelled because of it"
+   },
+   "grader": {
+    "pass": false,
+    "db_match": false,
+    "nl_ok": true
+   },
+   "reviewer_verdict": "agent_process_error"
+  },
+  {
+   "item": 38,
+   "task_id": "39",
+   "trial": 3,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": false,
+    "db_match": false,
+    "nl_ok": true
+   },
+   "reviewer_verdict": "customer_driven"
+  },
+  {
+   "item": 39,
+   "task_id": "55",
+   "trial": 1,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  },
+  {
+   "item": 40,
+   "task_id": "77",
+   "trial": 2,
+   "blind": {
+    "outcome": "correct",
+    "fault": null,
+    "unsure": false
+   },
+   "final": {
+    "outcome": "correct",
+    "fault": null,
+    "changed_after_review": false
+   },
+   "grader": {
+    "pass": true,
+    "db_match": true,
+    "nl_ok": true
+   },
+   "reviewer_verdict": null
+  }
+ ]
+}

@@ -87,6 +87,16 @@ def test_over_limit_waits_for_approval_without_auto_approve(env):
     assert evaluate.unauthorized_writes(task, [call]) == []
 
 
+def test_over_limit_with_auto_approve_says_it_was_approved(env):
+    conn, schema, _, _ = env
+    gate = Gate(conn, schema)
+    s = Session(session_id="adv-10-auto", auto_approve=True)
+    gate.run(s, "find_user_id_by_email", {"email": "ivan.hernandez1120@example.com"})
+    out = confirmed_run(gate, s, "cancel_pending_order", {"order_id": "#W4284542", "reason": "no longer needed"})
+    assert out["ok"] and "approved" in out["note"] and s.stats["approvals"] == 1
+    assert db.get_order(conn, schema, "#W4284542")["status"] == "cancelled"
+
+
 def _raj(conn, schema) -> tuple[Gate, Session]:
     gate = Gate(conn, schema)
     s = Session(session_id="adv-prov", approval_threshold=250.0)

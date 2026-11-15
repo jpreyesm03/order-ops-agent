@@ -527,3 +527,34 @@ added under it as they come in.
   (3) τ²'s `modify_pending_order_items` copies the last variant's price and options onto every swapped item.
   Scoring is unaffected (the expected database comes from the same code).
 - **Quota:** for `final_tau2` the 5-hour stop was raised once to 95%; the weekly stop stayed at 80%.
+
+## D35. Human labels vs the automatic grader (final_own, 40 conversations)
+- **Why:** every number above comes from an automatic grader (database match + an LLM judge for required
+  statements) and an LLM failure reviewer. Before the cloud redeploy, I labeled transcripts myself to check how far
+  those can be trusted.
+- **Sample (fixed before labeling):** one episode per test task from `final_own` (task 64 excluded, D32); where a
+  task had a failed trial, a failed trial was picked so failures are well represented; one extra failed episode
+  makes 40 (13 failed by the grader). Shuffled, seed fixed.
+- **Blind:** the labeling page showed the customer's scenario, the conversation and every tool call, with no grader
+  score, no expected actions and no reviewer verdict. Per episode: outcome correct or not, and if not, whose fault
+  (agent wrong change, agent process error, customer-driven, benchmark issue). Labels saved per click.
+- **Review after labeling:** 6 unclear episodes were then compared with the expected answers and settled; 4 labels
+  changed (two "correct" became process errors, two empty fault types filled in). Both stages are reported.
+  Data: `evals/human_labels/final_own.json`; numbers: `evals/human_label_agreement.py`.
+- **Results:** agreement with the grader 70% blind (κ 0.15), 77.5% after review (κ 0.38). Of 13 grader failures,
+  3 were agent errors (1 wrong change, own 36 t0, the same one the hand review in FINAL_REVIEW.md counted; 2
+  process errors: 32 t3 transferred to a human before doing the cancellations and return it could do, 9 t3
+  hid the preferred lamp behind a color filter); 9 were customer-driven; 1 depended on order dates that aren't in
+  the data (68 t3). 0 of 27 grader passes were agent errors. Reviewer vs human on the 10 episodes it triaged: 7
+  same type; it called 2 customer-driven cases wrong changes and the real wrong change a process error.
+- **What it means:** κ is low because the grader measures "end state equals the hidden script", which fails the
+  agent whenever the simulated customer strays. It never passed a wrong conversation in this sample, so the bars
+  are conservative. The reviewer is useful for triage only (same conclusion as D34).
+- **Found by labeling only:** with `auto_approve` (eval mode) a write over $250 ran at once while the confirmation
+  text had said it needed a supervisor, so the agent's account contradicted itself (own 40 t3). The live app was
+  already right. Fix: in eval mode the tool result now says a supervisor approved it. Database outcomes, and so all
+  scores, are unchanged; no rerun.
+- **Product notes from the labels (not changed, policy is the benchmark's):** partial cancels, mixed
+  return/exchange in one order and same-item exchanges are client policy questions for a real deployment. Worth
+  building later: show an order's items and address when the customer says "my most recent order"; ask a
+  clarifying question when a request is ambiguous; show a real supervisor queue time in the live app.
